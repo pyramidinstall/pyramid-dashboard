@@ -12,7 +12,7 @@ export default function InstallNet({ data }) {
   if (!d) return null;
 
   const { quarters, iqPMRates, inetPMRates } = d;
-  const qLabels = ['Q2 '25', 'Q3 '25', 'Q4 '25', 'Q1 '26', 'Q2 '26'];
+  const qLabels = ["Q2 '25", "Q3 '25", "Q4 '25", "Q1 '26", "Q2 '26"];
 
   // Build trend chart data
   const trendData = quarters.map((q, i) => {
