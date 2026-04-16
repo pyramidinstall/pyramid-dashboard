@@ -1,0 +1,10 @@
+{
+  "files": {
+    "main.js": "/pyramid-dashboard/static/js/main.bcbedae8.js",
+    "index.html": "/pyramid-dashboard/index.html",
+    "main.bcbedae8.js.map": "/pyramid-dashboard/static/js/main.bcbedae8.js.map"
+  },
+  "entrypoints": [
+    "static/js/main.bcbedae8.js"
+  ]
+}
