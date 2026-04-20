@@ -151,7 +151,7 @@ export default function Overview({ data }) {
               <span style={{ color:C.text }}>{fmtCurrency(c.y1Rev)}</span>
               <span><Badge type={y1Over?'red':'gray'}>{fmtPct(c.y1Pct)}</Badge></span>
               <span style={{ color:C.textSub }}>{c.y2Rev>0?fmtCurrency(c.y2Rev):'$0'}</span>
-              <span style={{ color:C.textSub }}>{c.y2Pct>0?fmtPct(c.y2Pct):'—'}</span>
+              <span style={{ color:C.textSub }}>{c.y2Pct>0?fmtPct(c.y2Pct):'$0'}</span>
               <span style={{ color:C.textSub }}>{fmtCurrency(c.pipeVal)}</span>
               <span style={{ color:C.textSub }}>{fmtPct(c.pipePct)}</span>
               <span style={{ fontWeight:700, fontSize:14, color:improving?C.green:worsening?C.red:C.textMuted }}>{improving?'↓✓':worsening?'↑⚠':'—'}</span>

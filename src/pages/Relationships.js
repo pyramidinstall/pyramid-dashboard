@@ -79,7 +79,7 @@ export default function Relationships({ data }) {
           { key:'pre_acq_quotes', label:'Pre-acq quotes', width:'12%' },
           { key:'days_since_last_quote', label:'Days since last', width:'12%', render:v=>v?`${v}d`:'—' },
           { key:'last_quote_date', label:'Last quote', width:'12%' },
-        ]} rows={[...data.contacts].sort((a,b)=>parseNum(b.post_acq_quotes)-parseNum(a.post_acq_quotes))} onRowClick={r=>setSelected(r.company)} />
+        ]} rows={[...(d.enrichedContacts||data.contacts||[])].sort((a,b)=>parseNum(b.post_acq_quotes)-parseNum(a.post_acq_quotes))} onRowClick={r=>setSelected(r.company)} />
       </Card>
 
       {selected && (

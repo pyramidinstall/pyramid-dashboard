@@ -10,7 +10,7 @@ export default function DealerRelationships({ data }) {
 
   if (!d) return null;
 
-  const goingCold = d.pmList.filter(p => p.status === 'cold');
+  const goingCold = d.pmList.filter(p => p.status === 'cold' || p.status === 'watch');
   const newSources = d.newSources;
 
   const companyQuotes = selected
