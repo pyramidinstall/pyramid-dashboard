@@ -150,27 +150,7 @@ export default function Overview({ data }) {
         </Card>
       </Grid>
 
-      <div style={{ background:'#fff', border:`2px solid ${C.green}`, borderRadius:12, padding:'14px 20px', display:'flex', alignItems:'center', justifyContent:'space-between', gap:16, margin:'10px 0 14px' }}>
-        <div>
-          <div style={{ fontSize:12, color:C.textSub, marginBottom:2 }}>Combined forward visibility</div>
-          <div style={{ fontSize:11, color:C.textMuted }}>Pipeline {fmtCurrency(d.pipelineWeighted)} + Jobs in flight {fmtCurrency(d.totalFlightWeighted)}</div>
-        </div>
-        <div style={{ display:'flex', alignItems:'baseline', gap:16 }}>
-          <div style={{ textAlign:'center' }}>
-            <div style={{ fontSize:11, color:C.textMuted, marginBottom:2 }}>Face value</div>
-            <div style={{ fontSize:18, fontWeight:600, color:C.textSub }}>{fmtCurrency(d.totalForwardFace)}</div>
-          </div>
-          <div style={{ fontSize:20, color:C.textMuted }}>→</div>
-          <div style={{ textAlign:'center' }}>
-            <div style={{ fontSize:11, color:C.textMuted, marginBottom:2 }}>Weighted (realistic)</div>
-            <div style={{ fontSize:28, fontWeight:700, color:C.green }}>{fmtCurrency(d.totalForwardWeighted)}</div>
-          </div>
-          <div style={{ textAlign:'center' }}>
-            <div style={{ fontSize:11, color:C.textMuted, marginBottom:2 }}>Of $3M target</div>
-            <div style={{ fontSize:18, fontWeight:600, color:C.amber }}>{fmtPct(d.totalForwardWeighted/3000000)}</div>
-          </div>
-        </div>
-      </div>
+
 
       <SectionLabel>Customer concentration — revenue share · pipeline share · trend</SectionLabel>
       <Card style={{ marginBottom:14 }}>
