@@ -45,7 +45,7 @@ export function useOverviewData(data) {
 
     const openOrders = orders.filter(r=>parseBool(r.is_open_quote));
     const pipelineFace = openOrders.reduce((s,r)=>s+parseNum(r.grand_total),0);
-    const pipelineWeighted = openOrders.reduce((s,r)=>s+parseNum(r.weighted_backlog||0),0);
+    const pipelineWeighted = openOrders.reduce((s,r)=>s+parseNum(r.pipeline_weighted||0),0);
 
     const readyToInvoice = orders.filter(r=>r.status==='Ready to Invoice');
     const rtiValue = readyToInvoice.filter(r=>parseNum(r.days_in_status)<=30)
@@ -82,7 +82,7 @@ export function usePipelineData(data) {
       const rows=open.filter(r=>r.cohort===c);
       return {cohort:c, count:rows.length,
         face:Math.round(rows.reduce((s,r)=>s+parseNum(r.grand_total),0)),
-        weighted:Math.round(rows.reduce((s,r)=>s+parseNum(r.weighted_backlog||0),0))};
+        weighted:Math.round(rows.reduce((s,r)=>s+parseNum(r.pipeline_weighted||0),0))};
     });
     const expiryAlerts = orders.filter(r=>r.expiry_alert)
       .sort((a,b)=>parseNum(a.days_to_expiry)-parseNum(b.days_to_expiry));
@@ -138,7 +138,7 @@ export function useDealerData(data) {
     if (!data) return null;
     const { orders } = data;
     const quarters = ['2025Q2','2025Q3','2025Q4','2026Q1','2026Q2'];
-    const postOrders = orders.filter(r=>['Year 1','Year 2'].includes(r.year_bucket)&&r.channel!=='INSTALL Net');
+    const postOrders = orders.filter(r=>['Year 1','Year 2'].includes(r.year_bucket));
 
     const pmMap = {};
     postOrders.forEach(r => {

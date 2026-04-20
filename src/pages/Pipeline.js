@@ -1,112 +1,156 @@
 import React, { useState } from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { Card, CardTitle, SectionLabel, Alert, Badge, Table, Modal, DetailRow, Insight, C } from '../components/UI';
 import { usePipelineData } from '../utils/dataHooks';
 import { fmtCurrency, parseNum } from '../utils/sheets';
 
-const COHORT_COLORS = { 'XS <$1K':C.purple,'S $1K-5K':C.blue,'M $5K-15K':C.green,'L $15K-50K':C.amber,'XL $50K+':C.red };
+const COHORT_COLORS = {'XS <$1K':C.purple,'S $1K-5K':C.blue,'M $5K-15K':C.green,'L $15K-50K':C.amber,'XL $50K+':C.red};
+
+export function usePipelineDataFixed(data) {
+  if (!data) return null;
+  const { orders } = data;
+  const open = orders.filter(r => r.is_open_quote === 'TRUE');
+  const cohorts = ['XS <$1K','S $1K-5K','M $5K-15K','L $15K-50K','XL $50K+'];
+  const byCohort = cohorts.map(c => {
+    const rows = open.filter(r => r.cohort === c);
+    return {
+      cohort: c, count: rows.length,
+      face: Math.round(rows.reduce((s,r) => s+parseNum(r.grand_total),0)),
+      weighted: Math.round(rows.reduce((s,r) => s+parseNum(r.pipeline_weighted||0),0)),
+    };
+  });
+  const expiryAlerts = orders.filter(r => r.expiry_alert)
+    .sort((a,b) => parseNum(a.days_to_expiry)-parseNum(b.days_to_expiry));
+  const recentlyExpired = orders
+    .filter(r => r.status==='Labor Quote Expired' && parseNum(r.grand_total)>=15000)
+    .filter(r => { const d=parseNum(r.days_to_expiry); return d<0&&d>-90; })
+    .sort((a,b) => parseNum(b.days_to_expiry)-parseNum(a.days_to_expiry));
+  const nurture = open.filter(r => parseNum(r.grand_total)>=25000)
+    .sort((a,b) => parseNum(b.grand_total)-parseNum(a.grand_total));
+  const totalFace = open.reduce((s,r) => s+parseNum(r.grand_total),0);
+  const totalWeighted = open.reduce((s,r) => s+parseNum(r.pipeline_weighted||0),0);
+  return {byCohort, expiryAlerts, recentlyExpired, nurture, allOpen:open, totalFace, totalWeighted};
+}
 
 export default function Pipeline({ data }) {
-  const d = usePipelineData(data);
+  const d = usePipelineDataFixed(data);
   const [cohortFilter, setCohortFilter] = useState(null);
   const [selected, setSelected] = useState(null);
-
   if (!d) return null;
 
-  const totalFace = d.allOpen.reduce((s,r)=>s+parseNum(r.grand_total),0);
-  const totalWeighted = d.allOpen.reduce((s,r)=>s+parseNum(r.weighted_backlog||0),0);
   const filteredOpen = cohortFilter ? d.allOpen.filter(r=>r.cohort===cohortFilter) : d.allOpen;
-
-  const chartData = d.byCohort.map(c=>({ name:c.cohort.split(' ')[0]+c.cohort.split(' ')[1], face:c.face, weighted:c.weighted }));
+  const chartData = d.byCohort.map(c=>({name:c.cohort, cohort:c.cohort, face:c.face, weighted:c.weighted}));
 
   return (
-    <div style={{ padding:'20px 24px', maxWidth:1320, margin:'0 auto' }}>
-      <h2 style={{ fontSize:18, fontWeight:700, color:C.text, marginBottom:4 }}>Pipeline</h2>
-      <p style={{ fontSize:12, color:C.textSub, marginBottom:12 }}>{d.allOpen.length} open quotes · {fmtCurrency(totalFace)} face · {fmtCurrency(totalWeighted)} weighted · click any bar or row to drill down</p>
+    <div style={{padding:'20px 24px', maxWidth:1320, margin:'0 auto'}}>
+      <h2 style={{fontSize:18, fontWeight:700, color:C.text, marginBottom:4}}>Pipeline</h2>
+      <p style={{fontSize:12, color:C.textSub, marginBottom:12}}>{d.allOpen.length} open quotes · {fmtCurrency(d.totalFace)} face · {fmtCurrency(d.totalWeighted)} weighted · click any bar or row to drill down</p>
 
-      <Alert type="amber">Face value ({fmtCurrency(totalFace)}) vs weighted ({fmtCurrency(totalWeighted)}) — 61% discount. Maffucci $228K face → $9K weighted (no history, 3.8% cohort CR). AFD $200K → $32K (16% CR). Plan from weighted only.</Alert>
+      <Alert type="amber">Face value ({fmtCurrency(d.totalFace)}) vs weighted ({fmtCurrency(d.totalWeighted)}) — {Math.round((1-d.totalWeighted/d.totalFace)*100)}% discount. Maffucci and AFD drive most of the gap. Plan from weighted only.</Alert>
 
       <SectionLabel>By cohort — face vs weighted · click bar to filter quotes below</SectionLabel>
-      <Card style={{ marginBottom:12 }}>
-        <div style={{ height:190 }}>
+      <Card style={{marginBottom:12}}>
+        <div style={{height:190}}>
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} margin={{ top:5, right:10, bottom:5, left:10 }}>
-              <XAxis dataKey="name" tick={{ fontSize:10, fill:C.textMuted }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize:10, fill:C.textMuted }} axisLine={false} tickLine={false} tickFormatter={v=>`$${Math.round(v/1000)}K`} />
-              <Tooltip formatter={v=>[fmtCurrency(v,false),'']} contentStyle={{ fontSize:12, borderRadius:8 }} />
+            <BarChart data={chartData} margin={{top:5,right:10,bottom:5,left:10}}>
+              <XAxis dataKey="name" tick={{fontSize:10,fill:C.textMuted}} axisLine={false} tickLine={false} />
+              <YAxis tick={{fontSize:10,fill:C.textMuted}} axisLine={false} tickLine={false} tickFormatter={v=>`$${Math.round(v/1000)}K`} />
+              <Tooltip formatter={v=>[fmtCurrency(v,false),'']} contentStyle={{fontSize:12,borderRadius:8}} />
+              <Legend wrapperStyle={{fontSize:11}} />
               <Bar dataKey="face" name="Face value" fill={C.blue} radius={[3,3,0,0]} opacity={0.4}
-                onClick={(e)=>{ const c=d.byCohort.find(x=>x.cohort.startsWith(e.name.slice(0,2))||x.cohort===e.name); if(c) setCohortFilter(cohortFilter===c.cohort?null:c.cohort); }} style={{ cursor:'pointer' }} />
+                onClick={e=>setCohortFilter(cohortFilter===e.cohort?null:e.cohort)} style={{cursor:'pointer'}} />
               <Bar dataKey="weighted" name="Weighted" fill={C.green} radius={[3,3,0,0]}
-                onClick={(e)=>{ const c=d.byCohort.find(x=>x.cohort.startsWith(e.name.slice(0,2))||x.cohort===e.name); if(c) setCohortFilter(cohortFilter===c.cohort?null:c.cohort); }} style={{ cursor:'pointer' }} />
+                onClick={e=>setCohortFilter(cohortFilter===e.cohort?null:e.cohort)} style={{cursor:'pointer'}} />
             </BarChart>
           </ResponsiveContainer>
         </div>
-        <div style={{ display:'flex', gap:12, marginTop:6, fontSize:11, color:C.textSub }}>
-          <span style={{ display:'flex', alignItems:'center', gap:4 }}><span style={{ width:10, height:10, borderRadius:2, background:C.blue, opacity:0.4, display:'inline-block' }}></span>Face value</span>
-          <span style={{ display:'flex', alignItems:'center', gap:4 }}><span style={{ width:10, height:10, borderRadius:2, background:C.green, display:'inline-block' }}></span>Weighted</span>
-          {cohortFilter && <button onClick={()=>setCohortFilter(null)} style={{ background:'transparent', border:`1px solid ${C.border}`, color:C.textSub, padding:'2px 8px', borderRadius:4, fontSize:11, cursor:'pointer' }}>Clear filter ×</button>}
-        </div>
+        {cohortFilter && (
+          <button onClick={()=>setCohortFilter(null)} style={{marginTop:6,background:'transparent',border:`1px solid ${C.border}`,color:C.textSub,padding:'3px 10px',borderRadius:4,fontSize:11,cursor:'pointer'}}>
+            Clear filter: {cohortFilter} ×
+          </button>
+        )}
       </Card>
 
-      {(d.expiryAlerts.length > 0 || d.recentlyExpired.length > 0) && <>
+      {(d.expiryAlerts.length>0 || d.recentlyExpired.length>0) && <>
         <SectionLabel>Quote expiry alerts — L+ quotes ($15K+)</SectionLabel>
-        <Alert type="red"><strong>{fmtCurrency(d.recentlyExpired.reduce((s,r)=>s+parseNum(r.grand_total),0))} in recently expired L+ quotes need follow-up.</strong> Whalen #12150 ($249.5K) confirmed Q1 2027. Systems Source #12236 ($78K) expired recently.</Alert>
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:12 }}>
+        <Alert type="red"><strong>{d.recentlyExpired.reduce((s,r)=>s+parseNum(r.grand_total),0)>0 ? fmtCurrency(d.recentlyExpired.reduce((s,r)=>s+parseNum(r.grand_total),0))+' in recently expired L+ quotes need follow-up.' : ''}</strong> Check expiring quotes and follow up before they lapse.</Alert>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
           <Card>
-            <CardTitle>Expiring within 30 days</CardTitle>
+            <CardTitle>Expiring within 30 days — follow up now</CardTitle>
             <Table cols={[
-              { key:'order_number', label:'#', width:'12%' },
-              { key:'customer', label:'Customer', width:'35%' },
-              { key:'grand_total', label:'Value', width:'18%', render:v=>fmtCurrency(parseNum(v)) },
-              { key:'days_to_expiry', label:'Days left', width:'18%', render:v=><Badge type={parseNum(v)<=14?'red':'amber'}>{v}d</Badge> },
+              {key:'order_number',label:'#',width:'10%'},
+              {key:'customer',label:'Customer',width:'32%'},
+              {key:'grand_total',label:'Value',width:'16%',render:v=>fmtCurrency(parseNum(v))},
+              {key:'pm',label:'PM',width:'22%'},
+              {key:'days_to_expiry',label:'Days left',width:'20%',render:v=><Badge type={parseNum(v)<=14?'red':'amber'}>{v}d</Badge>},
             ]} rows={d.expiryAlerts} onRowClick={setSelected} />
           </Card>
           <Card>
             <CardTitle>Recently expired — follow up or reissue</CardTitle>
             <Table cols={[
-              { key:'order_number', label:'#', width:'12%' },
-              { key:'customer', label:'Customer', width:'35%' },
-              { key:'grand_total', label:'Value', width:'18%', render:v=>fmtCurrency(parseNum(v)) },
-              { key:'days_to_expiry', label:'Expired', width:'18%', render:v=><Badge type="amber">{Math.abs(parseNum(v))}d ago</Badge> },
+              {key:'order_number',label:'#',width:'10%'},
+              {key:'customer',label:'Customer',width:'32%'},
+              {key:'grand_total',label:'Value',width:'16%',render:v=>fmtCurrency(parseNum(v))},
+              {key:'pm',label:'PM',width:'22%'},
+              {key:'days_to_expiry',label:'Expired',width:'20%',render:v=><Badge type="amber">{Math.abs(parseNum(v))}d ago</Badge>},
             ]} rows={d.recentlyExpired} onRowClick={setSelected} />
           </Card>
         </div>
       </>}
 
       <SectionLabel>Large job nurture — $25K+ open quotes</SectionLabel>
-      <Alert type="amber">{d.nurture.length} quotes · {fmtCurrency(d.nurture.reduce((s,r)=>s+parseNum(r.grand_total),0))} face · {fmtCurrency(d.nurture.reduce((s,r)=>s+parseNum(r.weighted_backlog||0),0))} weighted. XL jobs not in base projection — wins are upside. Click any row for detail.</Alert>
-      <Card style={{ marginBottom:12 }}>
+      <Card style={{marginBottom:12}}>
         <Table cols={[
-          { key:'order_number', label:'#', width:'8%' },
-          { key:'customer', label:'Customer', width:'20%' },
-          { key:'pm', label:'PM', width:'15%' },
-          { key:'grand_total', label:'Face', width:'10%', render:v=>fmtCurrency(parseNum(v)) },
-          { key:'cohort', label:'Tier', width:'8%', render:v=><Badge type={v?.includes('XL')?'red':'amber'}>{v?.includes('XL')?'XL':'L'}</Badge> },
-          { key:'backlog_confidence', label:'CR', width:'7%', render:v=>v?`${Math.round(parseNum(v)*100)}%`:'—' },
-          { key:'weighted_backlog', label:'Weighted', width:'10%', render:v=>{const n=parseNum(v); return <span style={{color:n>20000?C.green:n>8000?C.amberTxt:C.red}}>{fmtCurrency(n)}</span>;} },
-          { key:'days_presented', label:'Age', width:'7%', render:v=>v?`${v}d`:'—' },
-          { key:'days_to_expiry', label:'Expires', width:'8%', render:v=>{if(!v)return'—'; const n=parseNum(v); if(n<0)return<Badge type="gray">expired</Badge>; if(n<=21)return<Badge type="red">{n}d</Badge>; if(n<=45)return<Badge type="amber">{n}d</Badge>; return`${n}d`;} },
-          { key:'channel', label:'Ch.', width:'7%', render:v=><Badge type={v==='INSTALL Net'?'blue':'gray'}>{v==='INSTALL Net'?'INET':'IQ'}</Badge> },
+          {key:'order_number',label:'#',width:'8%'},
+          {key:'order_name',label:'Order name',width:'22%',render:(v,row)=>v||row.customer},
+          {key:'customer',label:'Customer',width:'18%'},
+          {key:'pm',label:'PM',width:'14%'},
+          {key:'grand_total',label:'Face',width:'10%',render:v=>fmtCurrency(parseNum(v))},
+          {key:'pipeline_cr',label:'Win rate',width:'9%',render:v=>v?`${Math.round(parseNum(v)*100)}%`:'—'},
+          {key:'pipeline_weighted',label:'Weighted',width:'10%',render:v=>{
+            const n=parseNum(v);
+            return <span style={{color:n>20000?C.green:n>8000?C.amberTxt:C.red}}>{fmtCurrency(n)}</span>;
+          }},
+          {key:'days_presented',label:'Age',width:'9%',render:v=>v?`${v}d`:'—'},
         ]} rows={d.nurture} onRowClick={setSelected} />
       </Card>
 
       <SectionLabel>All open quotes{cohortFilter?` — ${cohortFilter}`:''} ({filteredOpen.length})</SectionLabel>
       <Card>
         <Table cols={[
-          { key:'order_number', label:'#', width:'8%' },
-          { key:'customer', label:'Customer', width:'22%' },
-          { key:'pm', label:'PM', width:'16%' },
-          { key:'channel', label:'Channel', width:'9%', render:v=><Badge type={v==='INSTALL Net'?'blue':'gray'}>{v==='INSTALL Net'?'INET':'IQ'}</Badge> },
-          { key:'grand_total', label:'Face', width:'10%', render:v=>fmtCurrency(parseNum(v)) },
-          { key:'cohort', label:'Cohort', width:'10%' },
-          { key:'weighted_backlog', label:'Weighted', width:'10%', render:v=>fmtCurrency(parseNum(v)) },
-          { key:'days_to_expiry', label:'Expires', width:'8%', render:v=>{if(!v)return'—'; const n=parseNum(v); if(n<=14)return<Badge type="red">{n}d</Badge>; if(n<=30)return<Badge type="amber">{n}d</Badge>; return`${n}d`;} },
+          {key:'order_number',label:'#',width:'8%'},
+          {key:'order_name',label:'Order name',width:'22%',render:(v,row)=>v||'—'},
+          {key:'customer',label:'Customer',width:'22%'},
+          {key:'pm',label:'PM',width:'16%'},
+          {key:'grand_total',label:'Face',width:'11%',render:v=>fmtCurrency(parseNum(v))},
+          {key:'pipeline_weighted',label:'Weighted',width:'11%',render:v=>fmtCurrency(parseNum(v))},
+          {key:'days_to_expiry',label:'Expires',width:'10%',render:v=>{
+            if(!v)return'—'; const n=parseNum(v);
+            if(n<0)return<Badge type="gray">expired</Badge>;
+            if(n<=14)return<Badge type="red">{n}d</Badge>;
+            if(n<=30)return<Badge type="amber">{n}d</Badge>;
+            return`${n}d`;
+          }},
         ]} rows={filteredOpen} onRowClick={setSelected} />
       </Card>
 
       {selected && (
         <Modal title={`Order #${selected.order_number}`} onClose={()=>setSelected(null)}>
-          {[['Customer',selected.customer],['PM / Contact',selected.pm],['Salesperson',selected.salesperson],['Status',selected.status],['Face value',fmtCurrency(parseNum(selected.grand_total),false)],['Cohort',selected.cohort],['Close rate used',selected.backlog_confidence?`${Math.round(parseNum(selected.backlog_confidence)*100)}%`:'—'],['Weighted value',fmtCurrency(parseNum(selected.weighted_backlog||0),false)],['Presented',selected.lqp_start_date||'—'],['Days presented',selected.days_presented?`${selected.days_presented} days`:'—'],['Expires',selected.expiry_date||'—'],['Days to expiry',selected.days_to_expiry?`${selected.days_to_expiry} days`:'—'],['Channel',selected.channel]].map(([k,v])=><DetailRow key={k} label={k} value={v}/>)}
+          {[
+            ['Order name', selected.order_name||'—'],
+            ['Customer', selected.customer],
+            ['PM / Contact', selected.pm],
+            ['Salesperson', selected.salesperson],
+            ['Status', selected.status],
+            ['Face value', fmtCurrency(parseNum(selected.grand_total),false)],
+            ['Cohort', selected.cohort],
+            ['Win rate used', selected.pipeline_cr?`${Math.round(parseNum(selected.pipeline_cr)*100)}%`:'—'],
+            ['Weighted value', fmtCurrency(parseNum(selected.pipeline_weighted||0),false)],
+            ['Presented', selected.lqp_start_date||'—'],
+            ['Days presented', selected.days_presented?`${selected.days_presented} days`:'—'],
+            ['Expires', selected.expiry_date||'—'],
+            ['Days to expiry', selected.days_to_expiry?`${selected.days_to_expiry} days`:'—'],
+          ].map(([k,v])=><DetailRow key={k} label={k} value={v}/>)}
         </Modal>
       )}
     </div>
