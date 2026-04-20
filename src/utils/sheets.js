@@ -52,16 +52,19 @@ export function parseDate(v) {
 
 export function fmtCurrency(n, compact = true) {
   if (n === null || n === undefined) return '$0';
-  if (compact && Math.abs(n) >= 1000000)
-    return '$' + (n / 1000000).toFixed(2) + 'M';
-  if (compact && Math.abs(n) >= 1000)
-    return '$' + Math.round(n / 1000) + 'K';
+  const abs = Math.abs(n);
+  if (compact && abs >= 1000000) return '$' + (n / 1000000).toFixed(2) + 'M';
+  if (compact && abs >= 1000) return '$' + Math.round(n / 1000) + 'K';
   return '$' + Math.round(n).toLocaleString();
 }
 
 export function fmtPct(n) {
-  if (n === null || n === undefined) return '—';
+  if (n === null || n === undefined || isNaN(n)) return '—';
   return (n * 100).toFixed(1) + '%';
+}
+
+export function today() {
+  return new Date();
 }
 
 export function daysSince(dateStr) {

@@ -1,319 +1,140 @@
 import React, { useState } from 'react';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { Card, CardTitle, SectionLabel, Grid, Alert, Badge, Table, TrendArrow, C } from '../components/UI';
-import { useCloseRateData } from '../utils/dataHooks';
+import { Card, CardTitle, SectionLabel, Grid, Alert, Badge, Table, Modal, DetailRow, Insight, FreqArrow, CRBadge, TrendArrow, C } from '../components/UI';
+import { useInetData } from '../utils/dataHooks';
 import { fmtCurrency, fmtPct, parseNum, parseBool } from '../utils/sheets';
 
 export default function InstallNet({ data }) {
-  const d = useCloseRateData(data);
+  const d = useInetData(data);
   const [selectedPM, setSelectedPM] = useState(null);
-  const [view, setView] = useState('inet'); // 'inet' or 'iq'
-
   if (!d) return null;
 
-  const { quarters, iqPMRates, inetPMRates } = d;
-  const qLabels = ["Q2 '25", "Q3 '25", "Q4 '25", "Q1 '26", "Q2 '26"];
+  const alerts = d.pmList.filter(p => p.crAlert);
+  const Q_LABELS = ["Q2 '25","Q3 '25","Q4 '25","Q1 '26","Q2 '26"];
 
-  // Build trend chart data
-  const trendData = quarters.map((q, i) => {
-    const row = { quarter: qLabels[i] };
-    inetPMRates.slice(0, 5).forEach(pm => {
-      if (pm.byQ[i] !== null) row[pm.pm.split(' ')[0]] = pm.byQ[i];
-    });
-    return row;
-  });
-
-  const TREND_COLORS = [C.green, C.blue, C.amber, C.red, C.purple];
-
-  // INET summary stats
-  const yr1Inet = data.installnet.filter(r => r.year_bucket === 'Year 1');
-  const decided = yr1Inet.filter(r => parseBool(r.decided));
-  const won = decided.filter(r => parseBool(r.won));
-  const passed = yr1Inet.filter(r => parseBool(r.passed));
-  const inetCR = decided.length > 0 ? won.length / decided.length : 0;
-  const inetRev = won.reduce((s, r) => s + parseNum(r.installation_price), 0);
-
-  // Alerts: declining PMs
-  const alerts = inetPMRates.filter(pm => {
-    const last = pm.byQ[pm.byQ.length - 2]; // Q1 26
-    const prev = pm.byQ[pm.byQ.length - 3]; // Q4 25
-    return last !== null && prev !== null && (prev - last) > 0.2;
-  });
+  const pmQuotes = selectedPM
+    ? data.installnet.filter(r => r.pm === selectedPM.pm && ['Year 1','Year 2'].includes(r.year_bucket))
+        .sort((a,b)=>new Date(b.date_requested)-new Date(a.date_requested)).slice(0,15)
+    : [];
 
   return (
-    <div style={{ padding: '20px 24px', maxWidth: 1320, margin: '0 auto' }}>
-      <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text, marginBottom: 4 }}>
-        INSTALL Net
-      </h2>
-      <p style={{ fontSize: 12, color: C.textSub, marginBottom: 16 }}>
-        Year 1: {won.length} won / {decided.length} decided · {fmtPct(inetCR)} SP close rate ·{' '}
-        {fmtCurrency(inetRev)} awarded revenue · {passed.length} passed (no bid)
-      </p>
+    <div style={{ padding:'20px 24px', maxWidth:1320, margin:'0 auto' }}>
+      <h2 style={{ fontSize:18, fontWeight:700, color:C.text, marginBottom:4 }}>INSTALL Net</h2>
+      <p style={{ fontSize:12, color:C.textSub, marginBottom:12 }}>SP velocity by PM · close rate trends · no-bid tracking · loss analysis</p>
 
-      {alerts.length > 0 && (
-        <Alert type="amber">
-          <strong>Close rate alerts:</strong>{' '}
-          {alerts.map(a => `${a.pm} dropped from ${fmtPct(a.byQ[a.byQ.findIndex(v=>v!==null+2)])} to ${fmtPct(a.byQ[3])}`).join(' · ')}
-          {' '}— all fully decided, confirmed decline. Investigate pricing competitiveness.
-        </Alert>
-      )}
-
-      {/* Summary metrics */}
-      <Grid cols={4} gap={10} style={{ marginBottom: 16 }}>
+      <Grid cols={4} gap={10} style={{ marginBottom:12 }}>
         {[
-          { label: 'SP close rate (Year 1)', value: fmtPct(inetCR), sub: 'Won / decided (ex-passed, ex-storage)' },
-          { label: 'Awarded revenue (Year 1)', value: fmtCurrency(inetRev), sub: 'From INET portal data' },
-          { label: 'Passed (no bid)', value: passed.length, sub: 'Your choice — not competitive losses' },
-          { label: 'Avg response time', value: '1.9 hrs', sub: 'Median, Year 1 (Joe: 2.8 hrs)' },
-        ].map((m, i) => (
-          <div key={i} style={{
-            background: '#f0f2f5', borderRadius: 8, padding: '12px 14px',
-          }}>
-            <div style={{ fontSize: 11, color: C.textSub, marginBottom: 3 }}>{m.label}</div>
-            <div style={{ fontSize: 20, fontWeight: 600, color: C.text }}>{m.value}</div>
-            <div style={{ fontSize: 11, color: C.textMuted }}>{m.sub}</div>
+          { label:'SP close rate (Year 1)', value:fmtPct(d.overallCR), sub:`${d.wonCount} won / ${d.decidedCount} decided (ex-passed)`, color:C.green },
+          { label:'Awarded revenue (Year 1)', value:fmtCurrency(d.revenue), sub:'From INSTALL Net portal data' },
+          { label:'Passed (no bid)', value:d.passedCount, sub:'Your choice — not competitive losses', color:C.gray },
+          { label:'Avg response time', value:'1.9 hrs', sub:'Year 1 median' },
+        ].map((m,i) => (
+          <div key={i} style={{ background:'#f0f2f5', borderRadius:8, padding:'12px 14px' }}>
+            <div style={{ fontSize:11, color:C.textSub, marginBottom:3 }}>{m.label}</div>
+            <div style={{ fontSize:20, fontWeight:600, color:m.color||C.text }}>{m.value}</div>
+            <div style={{ fontSize:11, color:C.textMuted }}>{m.sub}</div>
           </div>
         ))}
       </Grid>
 
-      {/* View toggle */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {[['inet', 'INSTALL Net PMs'], ['iq', 'IQ PMs']].map(([id, label]) => (
-          <button key={id} onClick={() => setView(id)}
-            style={{
-              background: view === id ? C.navy : 'transparent',
-              border: `1px solid ${view === id ? C.navy : C.border}`,
-              color: view === id ? '#fff' : C.textSub,
-              padding: '6px 16px', borderRadius: 8,
-              fontSize: 13, cursor: 'pointer', fontWeight: view === id ? 600 : 400,
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      {alerts.length > 0 && (
+        <Alert type="amber">
+          <strong>Close rate alerts:</strong>{' '}
+          {alerts.map(a=>`${a.pm}: ${fmtPct(a.qCRs[2])} → ${fmtPct(a.qCRs[3])} Q1 2026`).join(' · ')}
+          {' '}— confirmed declines, all decided quotes. Investigate pricing competitiveness with INSTALL Net.
+        </Alert>
+      )}
 
-      {/* PM scorecard */}
-      <SectionLabel>
-        {view === 'inet' ? 'INSTALL Net PM close rates' : 'IQ PM close rates'} — quarterly trend
-      </SectionLabel>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+      <SectionLabel>PM velocity scorecard — frequency · value · close rate · click for detail</SectionLabel>
+      <Card style={{ marginBottom:12 }}>
+        <div style={{ overflowX:'auto' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
             <thead>
-              <tr>
-                <th style={{ textAlign: 'left', padding: '4px 8px 8px 0', fontSize: 11,
-                  color: C.textMuted, borderBottom: `0.5px solid ${C.border}`, width: '20%' }}>
-                  {view === 'inet' ? 'PM' : 'Dealer / PM'}
-                </th>
-                <th style={{ textAlign: 'center', padding: '4px 8px 8px', fontSize: 11,
-                  color: C.textMuted, borderBottom: `0.5px solid ${C.border}`, width: '9%' }}>Overall</th>
-                {qLabels.map(q => (
-                  <th key={q} style={{ textAlign: 'center', padding: '4px 8px 8px', fontSize: 11,
-                    color: C.textMuted, borderBottom: `0.5px solid ${C.border}`, width: '9%' }}>
-                    {q}
-                  </th>
+              <tr style={{ borderBottom:`0.5px solid ${C.border}` }}>
+                {['PM','Q/mo trend','Avg value','CR overall',...Q_LABELS,'No-bid','Last quote'].map(h=>(
+                  <th key={h} style={{ textAlign:'left', fontSize:10, fontWeight:600, color:C.textMuted, padding:'4px 8px 8px 0', whiteSpace:'nowrap' }}>{h}</th>
                 ))}
-                <th style={{ textAlign: 'center', padding: '4px 8px 8px', fontSize: 11,
-                  color: C.textMuted, borderBottom: `0.5px solid ${C.border}`, width: '6%' }}>Trend</th>
-                {view === 'inet' && (
-                  <th style={{ textAlign: 'right', padding: '4px 0 8px 8px', fontSize: 11,
-                    color: C.textMuted, borderBottom: `0.5px solid ${C.border}`, width: '10%' }}>No-bid</th>
-                )}
               </tr>
             </thead>
             <tbody>
-              {(view === 'inet' ? inetPMRates : iqPMRates).map((pm, ri) => {
-                const overallColor = pm.overall === null ? C.textMuted
-                  : pm.overall >= 0.7 ? C.green
-                  : pm.overall >= 0.45 ? C.amberTxt
-                  : C.red;
-                const overallType = pm.overall === null ? 'gray'
-                  : pm.overall >= 0.7 ? 'green'
-                  : pm.overall >= 0.45 ? 'amber'
-                  : 'red';
-                const isAlert = alerts.some(a => a.pm === pm.pm || a.label === pm.label);
+              {d.pmList.map((pm,ri) => {
+                const isAlert = pm.crAlert;
                 return (
-                  <tr
-                    key={ri}
-                    style={{
-                      background: isAlert ? '#fff9f0' : ri % 2 === 1 ? '#fafafa' : 'transparent',
-                      cursor: 'pointer',
-                    }}
-                    onClick={() => setSelectedPM(pm)}
-                    onMouseEnter={e => e.currentTarget.style.background = '#f0f7ff'}
-                    onMouseLeave={e => e.currentTarget.style.background = isAlert ? '#fff9f0' : ri % 2 === 1 ? '#fafafa' : 'transparent'}
-                  >
-                    <td style={{ padding: '6px 8px 6px 0', borderBottom: `0.5px solid ${C.border}`,
-                      fontWeight: 500, color: C.text }}>
-                      {pm.label || pm.pm}
-                      {isAlert && <span style={{ color: C.red, marginLeft: 4 }}>⚠</span>}
+                  <tr key={ri}
+                    onClick={()=>setSelectedPM(pm)}
+                    style={{ background:isAlert?'#fff9f0':ri%2===1?'#fafafa':'transparent', cursor:'pointer' }}
+                    onMouseEnter={e=>e.currentTarget.style.background='#f0f7ff'}
+                    onMouseLeave={e=>e.currentTarget.style.background=isAlert?'#fff9f0':ri%2===1?'#fafafa':'transparent'}>
+                    <td style={{ padding:'6px 8px 6px 0', borderBottom:`0.5px solid ${C.border}`, fontWeight:500, color:C.text, maxWidth:140, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                      {pm.pm}{isAlert&&<span style={{color:C.red,marginLeft:4}}>⚠</span>}
                     </td>
-                    <td style={{ textAlign: 'center', padding: '6px 8px', borderBottom: `0.5px solid ${C.border}` }}>
-                      {pm.overall !== null
-                        ? <Badge type={overallType}>{fmtPct(pm.overall)}</Badge>
-                        : <span style={{ color: C.textMuted }}>—</span>}
-                    </td>
-                    {pm.byQ.map((q, i) => (
-                      <td key={i} style={{ textAlign: 'center', padding: '6px 8px',
-                        borderBottom: `0.5px solid ${C.border}`,
-                        color: q === null ? C.textMuted
-                          : q >= 0.7 ? C.green
-                          : q >= 0.45 ? C.amberTxt
-                          : C.red,
-                        fontWeight: 500,
-                      }}>
-                        {q !== null ? fmtPct(q) : '—'}
+                    <td style={{ padding:'6px 8px', borderBottom:`0.5px solid ${C.border}`, textAlign:'center' }}><FreqArrow trend={pm.freqTrend}/></td>
+                    <td style={{ padding:'6px 8px', borderBottom:`0.5px solid ${C.border}` }}>{fmtCurrency(pm.avgValue)}</td>
+                    <td style={{ padding:'6px 8px', borderBottom:`0.5px solid ${C.border}` }}><CRBadge value={pm.overallCR}/></td>
+                    {pm.qCRs.map((q,i) => (
+                      <td key={i} style={{ padding:'6px 8px', borderBottom:`0.5px solid ${C.border}`, textAlign:'center',
+                        color:q===null?C.textMuted:q>=0.7?C.green:q>=0.45?C.amberTxt:C.red, fontWeight:isAlert&&i===3?700:500 }}>
+                        {q!==null?fmtPct(q):'—'}
                       </td>
                     ))}
-                    <td style={{ textAlign: 'center', padding: '6px 8px',
-                      borderBottom: `0.5px solid ${C.border}` }}>
-                      <TrendArrow values={pm.byQ} />
+                    <td style={{ padding:'6px 8px', borderBottom:`0.5px solid ${C.border}`, fontSize:11,
+                      color:pm.qNoBid?.some(n=>n>=2)?C.amberTxt:C.textMuted }}>
+                      {pm.qNoBid?pm.qNoBid.join('/'):'-'}
                     </td>
-                    {view === 'inet' && (
-                      <td style={{ textAlign: 'right', padding: '6px 0 6px 8px',
-                        borderBottom: `0.5px solid ${C.border}`,
-                        color: C.textMuted, fontSize: 11,
-                      }}>
-                        {pm.noBidByQ?.some(n => n >= 2)
-                          ? <Badge type="amber">{pm.noBidByQ.join('/')}</Badge>
-                          : pm.noBidByQ?.join('/') || '—'}
-                      </td>
-                    )}
+                    <td style={{ padding:'6px 8px', borderBottom:`0.5px solid ${C.border}`, color:C.textMuted, whiteSpace:'nowrap' }}>
+                      {pm.daysSince!==null?`${pm.daysSince}d ago`:'—'}
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
+        <Insight>Frequency trend = direction of quote volume. High freq + 0% CR = price-checking. Declining freq + high CR = relationship cooling. Both patterns visible here. No-bid counts show quarters where you passed.</Insight>
       </Card>
 
-      {/* Trend chart */}
-      <SectionLabel>INSTALL Net close rate trend — top 5 PMs</SectionLabel>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ height: 200 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={trendData} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
-              <XAxis dataKey="quarter" tick={{ fontSize: 10, fill: C.textMuted }} axisLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: C.textMuted }} axisLine={false} tickLine={false}
-                tickFormatter={v => `${(v*100).toFixed(0)}%`} domain={[0, 1.1]} />
-              <Tooltip formatter={v => [`${(v*100).toFixed(0)}%`, '']}
-                contentStyle={{ fontSize: 12, borderRadius: 8 }} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              {inetPMRates.slice(0, 5).map((pm, i) => (
-                <Line key={pm.pm} type="monotone"
-                  dataKey={pm.pm.split(' ')[0]}
-                  stroke={TREND_COLORS[i]} strokeWidth={2}
-                  dot={{ r: 3 }} connectNulls />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </Card>
-
-      {/* Loss reasons */}
-      <SectionLabel>Loss reasons (Year 1, INSTALL Net)</SectionLabel>
+      <SectionLabel>Loss reasons — Year 1</SectionLabel>
       <Card>
-        {[
-          { reason: 'More competitive price', count: 132, pct: 0.64 },
-          { reason: 'No bid submitted (passed)', count: 49, pct: 0.24 },
-          { reason: 'Response time', count: 10, pct: 0.05 },
-          { reason: 'Less travel to site', count: 6, pct: 0.03 },
-          { reason: 'Other', count: 10, pct: 0.05 },
-        ].map((r, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-            <div style={{ width: 200, fontSize: 12, color: C.textSub, flexShrink: 0 }}>{r.reason}</div>
-            <div style={{ flex: 1, height: 7, background: '#f0f2f5', borderRadius: 4, overflow: 'hidden' }}>
-              <div style={{ width: `${r.pct*100}%`, height: '100%', background: C.blue, borderRadius: 4 }} />
+        {Object.entries(d.lossReasons).sort(([,a],[,b])=>b-a).map(([reason,count],i) => {
+          const total = Object.values(d.lossReasons).reduce((s,v)=>s+v,0);
+          return (
+            <div key={i} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6 }}>
+              <div style={{ width:210, fontSize:12, color:C.textSub, flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{reason}</div>
+              <div style={{ flex:1, height:7, background:'#f0f2f5', borderRadius:4, overflow:'hidden' }}>
+                <div style={{ width:`${count/total*100}%`, height:'100%', background:C.blue, borderRadius:4 }}/>
+              </div>
+              <div style={{ width:30, textAlign:'right', fontSize:12, color:C.text, fontWeight:500 }}>{count}</div>
             </div>
-            <div style={{ width: 40, textAlign: 'right', fontSize: 12, color: C.text, fontWeight: 500 }}>
-              {r.count}
-            </div>
-          </div>
-        ))}
-        <div style={{
-          background: '#f5f6f8', borderRadius: 8, padding: '8px 10px',
-          fontSize: 11, color: C.textSub, marginTop: 8,
-        }}>
-          9 of 10 "response time" losses show turnaround under 3 hours — likely a data quality issue with INSTALL Net.
-          Only project 500809 (24.6hrs, Thursday evening) is a genuine slow response.
-        </div>
+          );
+        })}
+        <Insight>9 of 10 response-time losses show turnaround under 3hrs — likely a data quality issue with INSTALL Net. Only project 500809 (24.6hrs Thursday evening) is a genuine slow response.</Insight>
       </Card>
 
-      {/* PM drill-down modal */}
       {selectedPM && (
-        <div
-          onClick={() => setSelectedPM(null)}
-          style={{
-            position: 'fixed', inset: 0,
-            background: 'rgba(0,0,0,0.5)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            zIndex: 1000,
-          }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
-              background: '#fff', borderRadius: 12,
-              padding: 24, maxWidth: 480, width: '90%',
-              boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-              <h3 style={{ fontSize: 16, fontWeight: 700, color: C.text }}>
-                {selectedPM.label || selectedPM.pm}
-              </h3>
-              <button onClick={() => setSelectedPM(null)}
-                style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.textMuted }}>
-                ×
-              </button>
-            </div>
-            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-              <div style={{ flex: 1, background: '#f5f6f8', borderRadius: 8, padding: '10px 12px' }}>
-                <div style={{ fontSize: 11, color: C.textSub }}>Overall CR</div>
-                <div style={{ fontSize: 20, fontWeight: 700, color: C.green }}>
-                  {selectedPM.overall !== null ? fmtPct(selectedPM.overall) : '—'}
-                </div>
-              </div>
-              {selectedPM.revenue !== undefined && (
-                <div style={{ flex: 1, background: '#f5f6f8', borderRadius: 8, padding: '10px 12px' }}>
-                  <div style={{ fontSize: 11, color: C.textSub }}>Year 1 revenue</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: C.blue }}>
-                    {fmtCurrency(selectedPM.revenue)}
-                  </div>
-                </div>
-              )}
-              {selectedPM.decided !== undefined && (
-                <div style={{ flex: 1, background: '#f5f6f8', borderRadius: 8, padding: '10px 12px' }}>
-                  <div style={{ fontSize: 11, color: C.textSub }}>Decided</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: C.text }}>
-                    {selectedPM.decided}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, marginBottom: 8 }}>
-              Quarterly breakdown
-            </div>
-            {['2025Q2','2025Q3','2025Q4','2026Q1','2026Q2'].map((q, i) => (
-              <div key={q} style={{
-                display: 'flex', justifyContent: 'space-between',
-                padding: '5px 0', borderBottom: `0.5px solid ${C.border}`, fontSize: 13,
-              }}>
-                <span style={{ color: C.textSub }}>{q}</span>
-                <span style={{
-                  fontWeight: 600,
-                  color: selectedPM.byQ[i] === null ? C.textMuted
-                    : selectedPM.byQ[i] >= 0.7 ? C.green
-                    : selectedPM.byQ[i] >= 0.45 ? C.amberTxt
-                    : C.red,
-                }}>
-                  {selectedPM.byQ[i] !== null ? fmtPct(selectedPM.byQ[i]) : '—'}
-                </span>
+        <Modal title={selectedPM.pm} onClose={()=>setSelectedPM(null)}>
+          <Grid cols={3} gap={8} style={{ marginBottom:14 }}>
+            {[['Total quotes',selectedPM.totalQuotes],['Overall CR',selectedPM.overallCR!==null?fmtPct(selectedPM.overallCR):'—'],['Revenue won',fmtCurrency(selectedPM.revenue)],['Passed (no bid)',selectedPM.passed],['Avg value',fmtCurrency(selectedPM.avgValue)],['Last quote',selectedPM.daysSince!==null?`${selectedPM.daysSince}d ago`:'—']].map(([l,v])=>(
+              <div key={l} style={{ background:'#f5f6f8', borderRadius:8, padding:'10px 12px' }}>
+                <div style={{ fontSize:11, color:C.textSub }}>{l}</div>
+                <div style={{ fontSize:16, fontWeight:700, color:C.text }}>{v}</div>
               </div>
             ))}
+          </Grid>
+          <div style={{ fontSize:12, fontWeight:600, color:C.textMuted, marginBottom:8 }}>Quarterly breakdown</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr', fontSize:11, fontWeight:600, color:C.textMuted, padding:'0 0 5px', borderBottom:`0.5px solid ${C.border}`, gap:6 }}>
+            <span>Quarter</span><span>Quotes</span><span>Value</span><span>CR</span><span>No-bid</span>
           </div>
-        </div>
+          {Q_LABELS.map((q,i) => (
+            <div key={q} style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr', padding:'5px 0', borderBottom:`0.5px solid ${C.border}`, fontSize:13, gap:6 }}>
+              <span style={{ color:C.textSub }}>{q}</span>
+              <span>{selectedPM.qVols[i]||0}</span>
+              <span>{fmtCurrency(selectedPM.qVals?.[i]||0)}</span>
+              <span style={{ fontWeight:600, color:selectedPM.qCRs[i]===null?C.textMuted:selectedPM.qCRs[i]>=0.7?C.green:selectedPM.qCRs[i]>=0.45?C.amberTxt:C.red }}>
+                {selectedPM.qCRs[i]!==null?fmtPct(selectedPM.qCRs[i]):'—'}
+              </span>
+              <span style={{ color:selectedPM.qNoBid?.[i]>0?C.amberTxt:C.textMuted }}>{selectedPM.qNoBid?.[i]||0}</span>
+            </div>
+          ))}
+        </Modal>
       )}
     </div>
   );
