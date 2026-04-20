@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { GoogleOAuthProvider } from '@react-oauth/google';
 import { AuthProvider, useAuth } from './utils/auth';
 import { fetchAllData } from './utils/sheets';
+import { debugData } from './utils/dataHooks';
 import { Spinner } from './components/UI';
 import Nav from './components/Nav';
 import Login from './pages/Login';
@@ -28,6 +29,7 @@ function Dashboard() {
     try {
       const d = await fetchAllData(accessToken);
       setData(d);
+      console.log('Dashboard data loaded:', debugData(d));
       setLastRefresh(new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));
     } catch(e) { setError(e.message); }
     setLoading(false);

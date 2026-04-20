@@ -2,7 +2,23 @@ import { useMemo } from 'react';
 import { parseNum, parseBool } from './sheets';
 
 const YEAR2_START = new Date('2026-04-01');
+const isTrue = v => v===true||String(v).toUpperCase()==='TRUE';
 const TODAY = new Date();
+
+export function debugData(data) {
+  if (!data) return 'no data';
+  const { installnet, orders } = data;
+  const inetOpen = (installnet||[]).filter(r=>['Final Quote','Project','Estimate'].includes(r.sp_bid_status));
+  const openQ = (orders||[]).filter(r=>isTrue(r.is_open_quote));
+  return {
+    inetTotal: (installnet||[]).length,
+    inetOpen: inetOpen.length,
+    inetPipelineTotal: inetOpen.reduce((s,r)=>s+parseNum(r.installation_price||0),0),
+    sampleSpBidStatus: (installnet||[]).slice(0,3).map(r=>r.sp_bid_status),
+    openQuotes: openQ.length,
+    sampleIsOpenQuote: (orders||[]).slice(0,3).map(r=>({ref:r.order_number,val:r.is_open_quote})),
+  };
+}
 
 export function useOverviewData(data) {
   return useMemo(() => {
@@ -28,7 +44,7 @@ export function useOverviewData(data) {
     orders.filter(r=>parseBool(r.is_open_quote)).forEach(r=>{const c=r.customer||'Unknown'; custPipe[c]=(custPipe[c]||0)+parseNum(r.grand_total);});
     // INET open pipeline from PYR200
     if(installnet) {
-      installnet.filter(r=>r.is_open_pipeline==='TRUE'||r.is_open_pipeline===true).forEach(r=>{
+      installnet.filter(r=>['Final Quote','Project','Estimate'].includes(r.sp_bid_status)).forEach(r=>{
         const val=parseNum(r.installation_price||0);
         if(val>0) custPipe['INSTALL Net']=(custPipe['INSTALL Net']||0)+val;
       });
@@ -56,7 +72,7 @@ export function useOverviewData(data) {
     const pipelineWeighted=openOrders.reduce((s,r)=>s+parseNum(r.pipeline_weighted||0),0);
 
     // INET open pipeline
-    const inetPipelineFace=installnet?installnet.filter(r=>r.is_open_pipeline==='TRUE'||r.is_open_pipeline===true)
+    const inetPipelineFace=installnet?installnet.filter(r=>['Final Quote','Project','Estimate'].includes(r.sp_bid_status))
       .reduce((s,r)=>s+parseNum(r.installation_price||0),0):0;
     const inetPipelineWeighted=inetPipelineFace*0.778;
 
@@ -121,7 +137,7 @@ export function usePipelineData(data) {
     const totalWeighted=open.reduce((s,r)=>s+parseNum(r.pipeline_weighted||0),0);
 
     // INET open pipeline from PYR200
-    const inetOpen=installnet?installnet.filter(r=>r.is_open_pipeline==='TRUE'||r.is_open_pipeline===true):[];
+    const inetOpen=installnet?installnet.filter(r=>['Final Quote','Project','Estimate'].includes(r.sp_bid_status)):[];
     const inetPipelineFace=inetOpen.reduce((s,r)=>s+parseNum(r.installation_price||0),0);
     const inetPipelineWeighted=Math.round(inetPipelineFace*0.778);
 
@@ -204,14 +220,29 @@ export function useDealerData(data) {
         totalQuotes:d.quotes.length,overallCR,qCRs,qVols,freqTrend,avgValue,daysSince,status,revenue};
     }).sort((a,b)=>b.totalQuotes-a.totalQuotes);
 
-    // Dealer concentration — non-INET only
+    // Dealer concentration — includes INSTALL Net
     const dealerRev={},dealerPipe={};
+    // Non-INET revenue from IQ orders
     postOrders.filter(r=>parseBool(r.is_won)&&r.year_bucket==='Year 1').forEach(r=>{dealerRev[r.customer]=(dealerRev[r.customer]||0)+parseNum(r.grand_total);});
+    // INET revenue from invoices
+    if(data.invoices){
+      data.invoices.filter(r=>r.channel==='INSTALL Net'&&r.year_bucket==='Year 1').forEach(r=>{
+        dealerRev['INSTALL Net']=(dealerRev['INSTALL Net']||0)+parseNum(r.grand_total);
+      });
+    }
+    // Non-INET pipeline
     postOrders.filter(r=>parseBool(r.is_open_quote)).forEach(r=>{dealerPipe[r.customer]=(dealerPipe[r.customer]||0)+parseNum(r.pipeline_weighted||0);});
+    // INET pipeline from PYR200
+    if(data.installnet){
+      data.installnet.filter(r=>['Final Quote','Project','Estimate'].includes(r.sp_bid_status)).forEach(r=>{
+        const val=parseNum(r.installation_price||0);
+        if(val>0) dealerPipe['INSTALL Net']=(dealerPipe['INSTALL Net']||0)+val*0.778;
+      });
+    }
     const totalRev=Object.values(dealerRev).reduce((s,v)=>s+v,0);
     const totalPipe=Object.values(dealerPipe).reduce((s,v)=>s+v,0);
-    const dealerConc=Object.entries(dealerRev).sort(([,a],[,b])=>b-a).slice(0,8).map(([dealer,rev])=>({
-      dealer:dealer.length>18?dealer.slice(0,18)+'…':dealer,
+    const dealerConc=Object.entries(dealerRev).sort(([,a],[,b])=>b-a).slice(0,10).map(([dealer,rev])=>({
+      dealer:dealer.length>20?dealer.slice(0,20)+'…':dealer,
       rev:Math.round(rev),revPct:rev/Math.max(totalRev,1),
       pipePct:(dealerPipe[dealer]||0)/Math.max(totalPipe,1),pipeVal:Math.round(dealerPipe[dealer]||0),
     }));
@@ -248,7 +279,7 @@ export function useInetData(data) {
       .reduce((s,r)=>s+parseNum(r.grand_total),0);
 
     // Open pipeline
-    const openPipeline=installnet.filter(r=>r.is_open_pipeline==='TRUE'||r.is_open_pipeline===true);
+    const openPipeline=installnet.filter(r=>['Final Quote','Project','Estimate'].includes(r.sp_bid_status));
     const pipelineFace=openPipeline.reduce((s,r)=>s+parseNum(r.installation_price||0),0);
     const pipelineWeighted=Math.round(pipelineFace*overallCR);
 
