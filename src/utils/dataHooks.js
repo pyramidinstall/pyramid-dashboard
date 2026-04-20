@@ -280,6 +280,19 @@ function enrichInstallnet(rawInet) {
 
 // ── MAIN DATA HOOK ───────────────────────────────────────────
 // All enrichment happens here once when data loads
+function enrichUnpaid(rawUnpaid) {
+  return (rawUnpaid || [])
+    .filter(r => !parseBool(r.ignore))
+    .map(r => ({
+      ...r,
+      gt: parseNum(r.grand_total),
+      agingDays: parseNum(r.aging_days),
+      agingDaysDue: parseNum(r.aging_days_due),
+      isOverdue: parseNum(r.aging_days_due) < 0,
+      isPartial: r.payment_status === 'Partial',
+    }));
+}
+
 export function useEnrichedData(rawData) {
   return useMemo(() => {
     if (!rawData) return null;
@@ -287,11 +300,12 @@ export function useEnrichedData(rawData) {
     const orders = enrichOrders(rawData.orders || []);
     const orderMap = Object.fromEntries(orders.map(r => [r.order_number, r]));
     const invoices = enrichInvoices(rawData.invoices || [], orderMap);
+    const unpaid = enrichUnpaid(rawData.unpaid || []);
     const installnet = enrichInstallnet(rawData.installnet || []);
     const contacts = (rawData.contacts || []).filter(r => !parseBool(r.ignore));
     const prospects = (rawData.prospects || []).filter(r => !parseBool(r.ignore));
 
-    return { orders, invoices, installnet, contacts, prospects };
+    return { orders, invoices, unpaid, installnet, contacts, prospects };
   }, [rawData]);
 }
 
@@ -317,11 +331,16 @@ export function debugData(rawData) {
 export function useOverviewData(data) {
   return useMemo(() => {
     if (!data) return null;
-    const { orders, invoices, installnet } = data;
+    const { orders, invoices, unpaid, installnet } = data;
 
     const yr1Rev = invoices.filter(r => r.yearBucket === 'Year 1').reduce((s,r) => s+r.gt, 0);
     const yr2Rev = invoices.filter(r => r.yearBucket === 'Year 2').reduce((s,r) => s+r.gt, 0);
     const dayOfYear2 = Math.max(1, Math.floor((TODAY - YEAR2_START) / 86400000) + 1);
+
+    // AR — invoiced but not yet paid (high confidence, ~98%)
+    const arTotal = (unpaid || []).reduce((s,r) => s + r.gt, 0);
+    const arWeighted = Math.round(arTotal * 0.98);
+    const arOverdue = (unpaid || []).filter(r => r.isOverdue);
 
     // Monthly revenue Year 1
     const monthlyMap = {};
@@ -396,8 +415,12 @@ export function useOverviewData(data) {
       rtiValue: Math.round(rtiValue),
       backlogFace: Math.round(backlogFace),
       skyline,
+      arTotal: Math.round(arTotal), arWeighted, arOverdue,
       totalForwardFace: Math.round(pipelineFace + inetPipelineFace + rtiValue + backlogFace + skyline),
       totalForwardWeighted: Math.round(pipelineWeighted + inetPipelineWeighted + rtiValue * 0.95 + backlogWeighted + skyline * 0.95),
+      // Full Year 2 picture: collected + AR + in flight + pipeline
+      yr2TotalFace: Math.round(yr2Rev + arTotal + rtiValue + backlogFace + pipelineFace + inetPipelineFace + skyline),
+      yr2TotalWeighted: Math.round(yr2Rev + arWeighted + rtiValue * 0.95 + backlogWeighted + pipelineWeighted + inetPipelineWeighted + skyline * 0.95),
     };
   }, [data]);
 }

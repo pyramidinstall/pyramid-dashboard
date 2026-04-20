@@ -34,13 +34,50 @@ export default function Overview({ data }) {
         </div>
       </div>
 
-      <Grid cols={5} gap={10} style={{ marginBottom:14 }}>
-        <MetricCard label="Year 1 final" value={fmtCurrency(d.yr1Rev)} sub="Apr 2025 – Mar 2026" />
-        <MetricCard label="Year 2 collected" value={fmtCurrency(d.yr2Rev)} sub={`Day ${d.dayOfYear2}`} color={C.textMuted} />
-        <MetricCard label="Year 2 target" value="$3.0M" sub={`Gap: ${fmtCurrency(3000000-d.yr2Rev)}`} />
-        <MetricCard label="Projected at current pace" value="$1.87M" sub="Gap to $3M: $1.13M" color={C.amber} />
-        <MetricCard label="Active quote sources" value={`${d.activePMs} PMs ↑`} sub={`${d.activeDealers} dealers · last 90 days`} color={C.green} highlight />
-      </Grid>
+      {/* Year 2 full picture — 4 layers */}
+      <div style={{background:'#fff',border:`1.5px solid ${C.green}`,borderRadius:12,padding:'14px 18px',marginBottom:14}}>
+        <div style={{fontSize:11,color:C.textMuted,marginBottom:10,fontWeight:600,textTransform:'uppercase',letterSpacing:'.05em'}}>Year 2 total visibility — Day {d.dayOfYear2} of 365</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(5,minmax(0,1fr))',gap:8,marginBottom:10}}>
+          <div style={{background:'#f0f2f5',borderRadius:8,padding:'10px 12px'}}>
+            <div style={{fontSize:10,color:C.textSub,marginBottom:2}}>Collected</div>
+            <div style={{fontSize:18,fontWeight:700,color:C.green}}>{fmtCurrency(d.yr2Rev)}</div>
+            <div style={{fontSize:10,color:C.textMuted}}>In the bank · 100%</div>
+          </div>
+          <div style={{background:'#f0f2f5',borderRadius:8,padding:'10px 12px'}}>
+            <div style={{fontSize:10,color:C.textSub,marginBottom:2}}>AR — invoiced, unpaid</div>
+            <div style={{fontSize:18,fontWeight:700,color:C.blue}}>{fmtCurrency(d.arTotal)}</div>
+            <div style={{fontSize:10,color:C.textMuted}}>{d.arOverdue?.length||0} overdue · 98% conf.</div>
+          </div>
+          <div style={{background:'#f0f2f5',borderRadius:8,padding:'10px 12px'}}>
+            <div style={{fontSize:10,color:C.textSub,marginBottom:2}}>Jobs in flight</div>
+            <div style={{fontSize:18,fontWeight:700,color:'#5DCAA5'}}>{fmtCurrency(d.totalFlightWeighted)}</div>
+            <div style={{fontSize:10,color:C.textMuted}}>{fmtCurrency(d.totalFlightFace)} face · 80–95%</div>
+          </div>
+          <div style={{background:'#f0f2f5',borderRadius:8,padding:'10px 12px'}}>
+            <div style={{fontSize:10,color:C.textSub,marginBottom:2}}>Pipeline</div>
+            <div style={{fontSize:18,fontWeight:700,color:C.amber}}>{fmtCurrency(d.pipelineWeighted)}</div>
+            <div style={{fontSize:10,color:C.textMuted}}>{fmtCurrency(d.pipelineFace)} face · weighted</div>
+          </div>
+          <div style={{background:'#1a1a2e',borderRadius:8,padding:'10px 12px'}}>
+            <div style={{fontSize:10,color:'rgba(255,255,255,0.6)',marginBottom:2}}>Total Year 2 visibility</div>
+            <div style={{fontSize:18,fontWeight:700,color:'#fff'}}>{fmtCurrency(d.yr2TotalWeighted)}</div>
+            <div style={{fontSize:10,color:'rgba(255,255,255,0.4)'}}>of $3M · {fmtPct(d.yr2TotalWeighted/3000000)}</div>
+          </div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+          <span style={{fontSize:11,color:C.textMuted}}>Year 1 run rate:</span>
+          <span style={{fontSize:11,fontWeight:600,color:C.text}}>$1.87M/yr</span>
+          <span style={{fontSize:11,color:C.textMuted,margin:'0 4px'}}>·</span>
+          <span style={{fontSize:11,color:C.textMuted}}>Year 2 target:</span>
+          <span style={{fontSize:11,fontWeight:600,color:C.text}}>$3.0M</span>
+          <span style={{fontSize:11,color:C.textMuted,margin:'0 4px'}}>·</span>
+          <span style={{fontSize:11,color:C.textMuted}}>Gap to target:</span>
+          <span style={{fontSize:11,fontWeight:600,color:C.red}}>{fmtCurrency(3000000-d.yr2TotalWeighted)}</span>
+          <span style={{fontSize:11,color:C.textMuted,margin:'0 4px'}}>·</span>
+          <MetricCard label="" value="" style={{display:'none'}}/>
+          <span style={{fontSize:11,color:C.green,fontWeight:600}}>Active sources: {d.activePMs} PMs across {d.activeDealers} dealers ↑</span>
+        </div>
+      </div>
 
       <SectionLabel>Revenue engines — projected annual at current pace</SectionLabel>
       <Card style={{ marginBottom:14 }}>
