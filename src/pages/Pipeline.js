@@ -107,10 +107,10 @@ export default function Pipeline({ data }) {
             <div style={{fontSize:12,color:C.textMuted}}>→ {fmtCurrency(d.inetPipelineWeighted)} weighted at 77.8% SP close rate</div>
           </div>
           <div style={{fontSize:11,color:C.textSub,maxWidth:400}}>
-            {d.inetOpen.length} open INET projects. These are quotes you submitted to INSTALL Net that haven't been decided yet. Close rate applied from Year 1 actuals (ex-passed, ex-canceled).
+            {(d.inetOpen||[]).length} open INET projects. These are quotes you submitted to INSTALL Net that haven't been decided yet. Close rate applied from Year 1 actuals (ex-passed, ex-canceled).
           </div>
         </div>
-        {d.inetOpen.length > 0 && (
+        {(d.inetOpen||[]).length > 0 && (
           <div style={{marginTop:12}}>
             <Table cols={[
               {key:'project_id',label:'Project ID',width:'12%'},
@@ -119,8 +119,8 @@ export default function Pipeline({ data }) {
               {key:'installation_price',label:'Face value',width:'14%',render:v=>fmtCurrency(parseNum(v))},
               {key:'sp_bid_status',label:'Status',width:'14%',render:v=><Badge type="blue">{v}</Badge>},
               {key:'date_requested',label:'Requested',width:'14%'},
-            ]} rows={d.inetOpen.slice(0,15)} />
-            {d.inetOpen.length > 15 && <div style={{fontSize:11,color:C.textMuted,marginTop:6}}>{d.inetOpen.length-15} more not shown</div>}
+            ]} rows={(d.inetOpen||[]).slice(0,15)} />
+            {(d.inetOpen||[]).length > 15 && <div style={{fontSize:11,color:C.textMuted,marginTop:6}}>{(d.inetOpen||[]).length-15} more not shown</div>}
           </div>
         )}
       </Card>
