@@ -76,7 +76,7 @@ export default function Overview({ data }) {
           <div style={{ fontSize:11, color:C.textSub, marginBottom:5 }}>All open quotes — gross face value, no adjustment</div>
           <div style={{ width:'100%', height:32, background:'#e8eaed', borderRadius:4, overflow:'hidden', marginBottom:4 }}>
             <div style={{ width:'100%', height:'100%', background:'#B5D4F4', display:'flex', alignItems:'center', paddingLeft:10 }}>
-              <span style={{ fontSize:12, fontWeight:600, color:'#0C447C', whiteSpace:'nowrap' }}>{fmtCurrency(d.pipelineFace)} face value</span>
+              <span style={{ fontSize:12, fontWeight:600, color:'#0C447C', whiteSpace:'nowrap' }}>{fmtCurrency(d.pipelineFace)} face value (incl. INET)</span>
             </div>
           </div>
           <div style={{ textAlign:'center', fontSize:11, color:C.textMuted, margin:'3px 0' }}>▼ weighted by PM / dealer / cohort close rates — 39% effective</div>
@@ -86,7 +86,7 @@ export default function Overview({ data }) {
               <span style={{ fontSize:13, fontWeight:600, color:'#fff', whiteSpace:'nowrap' }}>{fmtCurrency(d.pipelineWeighted)} weighted</span>
             </div>
           </div>
-          <Insight>INET $1.12M → $483K (43%) · Non-INET $1.30M → $457K (35%). See Pipeline page for drill-down.</Insight>
+          <Insight>Non-INET {fmtCurrency(d.nonInetPipelineFace)} → {fmtCurrency(d.nonInetPipelineWeighted)} · INET open quotes {fmtCurrency(d.inetPipelineFace)} → {fmtCurrency(d.inetPipelineWeighted)} (77.8% SP rate). See Pipeline page for drill-down.</Insight>
         </Card>
 
         <Card>
@@ -138,25 +138,27 @@ export default function Overview({ data }) {
       <SectionLabel>Customer concentration — revenue share · pipeline share · trend</SectionLabel>
       <Card style={{ marginBottom:14 }}>
         <Insight style={{ marginBottom:10, marginTop:0 }}>Healthy direction: INSTALL Net % declining while absolute revenue grows. Target below 35% by end of Year 2.</Insight>
-        <div style={{ display:'grid', gridTemplateColumns:'160px 80px 70px 70px 70px 60px', fontSize:11, fontWeight:600, color:C.textMuted, padding:'0 0 6px', borderBottom:`0.5px solid ${C.border}`, gap:6, marginBottom:4 }}>
-          <span>Customer</span><span>Yr1 revenue</span><span>Yr1 %</span><span>Yr2 % (so far)</span><span>Pipeline %</span><span>Trend</span>
+        <div style={{ display:'grid', gridTemplateColumns:'155px 70px 55px 70px 55px 70px 55px 50px', fontSize:11, fontWeight:600, color:C.textMuted, padding:'0 0 6px', borderBottom:`0.5px solid ${C.border}`, gap:6, marginBottom:4 }}>
+          <span>Customer</span><span>Yr1 revenue</span><span>Yr1 %</span><span>Yr2 revenue</span><span>Yr2 %</span><span>Pipeline $</span><span>Pipeline %</span><span>Trend</span>
         </div>
         {d.concentration.map((c,i) => {
           const y1Over = c.y1Pct > 0.2;
           const improving = c.y2Pct < c.y1Pct - 0.02;
           const worsening = c.y2Pct > c.y1Pct + 0.02;
           return (
-            <div key={i} style={{ display:'grid', gridTemplateColumns:'160px 80px 70px 70px 70px 60px', fontSize:11, padding:'5px 0', borderBottom:`0.5px solid ${C.border}`, gap:6, alignItems:'center' }}>
+            <div key={i} style={{ display:'grid', gridTemplateColumns:'155px 70px 55px 70px 55px 70px 55px 50px', fontSize:11, padding:'5px 0', borderBottom:`0.5px solid ${C.border}`, gap:6, alignItems:'center' }}>
               <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', color:C.text }}>{c.customer}</span>
               <span style={{ color:C.text }}>{fmtCurrency(c.y1Rev)}</span>
               <span><Badge type={y1Over?'red':'gray'}>{fmtPct(c.y1Pct)}</Badge></span>
-              <span style={{ color:improving?C.green:worsening?C.red:C.textSub }}>{c.y2Pct>0?fmtPct(c.y2Pct):'—'}</span>
+              <span style={{ color:C.textSub }}>{c.y2Rev>0?fmtCurrency(c.y2Rev):'$0'}</span>
+              <span style={{ color:C.textSub }}>{c.y2Pct>0?fmtPct(c.y2Pct):'—'}</span>
+              <span style={{ color:C.textSub }}>{fmtCurrency(c.pipeVal)}</span>
               <span style={{ color:C.textSub }}>{fmtPct(c.pipePct)}</span>
-              <span style={{ fontWeight:700, fontSize:14, color:improving?C.green:worsening?C.red:C.textMuted }}>{improving?'↓ ✓':worsening?'↑ ⚠':'—'}</span>
+              <span style={{ fontWeight:700, fontSize:14, color:improving?C.green:worsening?C.red:C.textMuted }}>{improving?'↓✓':worsening?'↑⚠':'—'}</span>
             </div>
           );
         })}
-        <div style={{ fontSize:10, color:C.textMuted, marginTop:6 }}>↓ ✓ = concentration decreasing (good) · ↑ ⚠ = concentration increasing</div>
+        <div style={{ fontSize:10, color:C.textMuted, marginTop:6 }}>↓✓ = concentration decreasing (good) · ↑⚠ = concentration increasing · Pipeline includes INET open quotes from PYR200</div>
       </Card>
 
       <SectionLabel>Year 1 monthly revenue — reference baseline</SectionLabel>

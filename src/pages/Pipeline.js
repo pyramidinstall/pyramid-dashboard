@@ -44,7 +44,7 @@ export default function Pipeline({ data }) {
   return (
     <div style={{padding:'20px 24px', maxWidth:1320, margin:'0 auto'}}>
       <h2 style={{fontSize:18, fontWeight:700, color:C.text, marginBottom:4}}>Pipeline</h2>
-      <p style={{fontSize:12, color:C.textSub, marginBottom:12}}>{d.allOpen.length} open quotes · {fmtCurrency(d.totalFace)} face · {fmtCurrency(d.totalWeighted)} weighted · click any bar or row to drill down</p>
+      <p style={{fontSize:12, color:C.textSub, marginBottom:12}}>Non-INET: {d.allOpen.length} open quotes · {fmtCurrency(d.totalFace)} face · {fmtCurrency(d.totalWeighted)} weighted · INET: {fmtCurrency(d.inetPipelineFace)} face · {fmtCurrency(d.inetPipelineWeighted)} weighted</p>
 
       <Alert type="amber">Face value ({fmtCurrency(d.totalFace)}) vs weighted ({fmtCurrency(d.totalWeighted)}) — {Math.round((1-d.totalWeighted/d.totalFace)*100)}% discount. Maffucci and AFD drive most of the gap. Plan from weighted only.</Alert>
 
@@ -98,7 +98,34 @@ export default function Pipeline({ data }) {
         </div>
       </>}
 
-      <SectionLabel>Large job nurture — $25K+ open quotes</SectionLabel>
+      <SectionLabel>INSTALL Net open pipeline — from PYR200</SectionLabel>
+      <Card style={{marginBottom:12}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
+          <div>
+            <div style={{fontSize:11,color:C.textSub,marginBottom:3}}>Open projects (Final Quote / Project / Estimate status)</div>
+            <div style={{fontSize:22,fontWeight:700,color:C.blue}}>{fmtCurrency(d.inetPipelineFace)} face</div>
+            <div style={{fontSize:12,color:C.textMuted}}>→ {fmtCurrency(d.inetPipelineWeighted)} weighted at 77.8% SP close rate</div>
+          </div>
+          <div style={{fontSize:11,color:C.textSub,maxWidth:400}}>
+            {d.inetOpen.length} open INET projects. These are quotes you submitted to INSTALL Net that haven't been decided yet. Close rate applied from Year 1 actuals (ex-passed, ex-canceled).
+          </div>
+        </div>
+        {d.inetOpen.length > 0 && (
+          <div style={{marginTop:12}}>
+            <Table cols={[
+              {key:'project_id',label:'Project ID',width:'12%'},
+              {key:'project_name',label:'Project name',width:'28%'},
+              {key:'pm',label:'PM',width:'18%'},
+              {key:'installation_price',label:'Face value',width:'14%',render:v=>fmtCurrency(parseNum(v))},
+              {key:'sp_bid_status',label:'Status',width:'14%',render:v=><Badge type="blue">{v}</Badge>},
+              {key:'date_requested',label:'Requested',width:'14%'},
+            ]} rows={d.inetOpen.slice(0,15)} />
+            {d.inetOpen.length > 15 && <div style={{fontSize:11,color:C.textMuted,marginTop:6}}>{d.inetOpen.length-15} more not shown</div>}
+          </div>
+        )}
+      </Card>
+
+      <SectionLabel>Large job nurture — $25K+ open quotes (non-INET)</SectionLabel>
       <Card style={{marginBottom:12}}>
         <Table cols={[
           {key:'order_number',label:'#',width:'8%'},

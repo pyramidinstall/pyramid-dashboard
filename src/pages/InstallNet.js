@@ -24,7 +24,7 @@ export default function InstallNet({ data }) {
       <Grid cols={4} gap={10} style={{ marginBottom:12 }}>
         {[
           { label:'SP close rate (Year 1)', value:fmtPct(d.overallCR), sub:`${d.wonCount} won / ${d.decidedCount} decided (ex-passed)`, color:C.green },
-          { label:'Awarded revenue (Year 1)', value:fmtCurrency(d.revenue), sub:'From INSTALL Net portal data' },
+          { label:'Pyramid revenue (Year 1)', value:fmtCurrency(d.pyramidRevenue||d.revenue), sub:'Actual invoices collected from INET jobs' },
           { label:'Passed (no bid)', value:d.passedCount, sub:'Your choice — not competitive losses', color:C.gray },
           { label:'Avg response time', value:'1.9 hrs', sub:'Year 1 median' },
         ].map((m,i) => (
