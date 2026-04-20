@@ -211,16 +211,19 @@ function enrichInvoices(rawInvoices, orderMap) {
       const order = orderMap[r.invoice_ref] || orderMap[orderRef];
       const customer = order?.customer || r.customer || 'Pre-acquisition order';
       const isInet = customer.includes('INSTALL Net');
-      const yearBucket = getYearBucket(r.invoiced_date);
+      // Use payment_date for revenue recognition (when cash was received)
+      // Fall back to invoiced_date if payment_date not available
+      const revenueDate = r.payment_date || r.invoiced_date;
+      const yearBucket = getYearBucket(revenueDate);
       const month = (() => {
-        if (!r.invoiced_date) return '';
-        const d = new Date(r.invoiced_date);
+        if (!revenueDate) return '';
+        const d = new Date(revenueDate);
         if (isNaN(d)) return '';
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       })();
       const quarter = (() => {
-        if (!r.invoiced_date) return '';
-        const d = new Date(r.invoiced_date);
+        if (!revenueDate) return '';
+        const d = new Date(revenueDate);
         if (isNaN(d)) return '';
         return `${d.getFullYear()}Q${Math.ceil((d.getMonth() + 1) / 3)}`;
       })();
