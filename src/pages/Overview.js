@@ -397,6 +397,26 @@ function MomentumBanner({ nonInetCountDelta, nonInetDollarDelta, inetCountDelta,
 function DrillTable({ drill, onOrderClick }) {
   const { type, items } = drill;
 
+  // Default sort by type — typically by what's most urgent or most valuable
+  const defaultSort = (() => {
+    switch (type) {
+      case 'quote':            return { key:'daysToExpiry', dir:'asc' };  // most urgent first
+      case 'order':            return { key:'daysInStatus', dir:'desc' }; // oldest first
+      case 'invoice':          return { key:'daysPastDue',  dir:'desc' }; // most overdue first
+      case 'pm':               return { key:'daysSilent',   dir:'desc' };
+      case 'dealer':           return { key:'daysSilent',   dir:'desc' };
+      case 'quotes':           return { key:'date',         dir:'desc' }; // most recent first
+      case 'newPMs':           return { key:'quoteCount',   dir:'desc' };
+      case 'newDealers':       return { key:'quoteCount',   dir:'desc' };
+      case 'invoices-paid':    return { key:'payment_date', dir:'desc' };
+      case 'invoices-unpaid':  return { key:'gt',           dir:'desc' }; // biggest first
+      case 'backlog':          return { key:'remaining',    dir:'desc' };
+      case 'pipeline':         return { key:'gt',           dir:'desc' };
+      case 'customer-invoices':return { key:'payment_date', dir:'desc' };
+      default:                 return null;
+    }
+  })();
+
   const cols = (() => {
     switch (type) {
       case 'quote':
@@ -531,9 +551,9 @@ function DrillTable({ drill, onOrderClick }) {
   return (
     <>
       <div style={{ fontSize:12, color:C.textMuted, marginBottom:10 }}>
-        {items.length} item{items.length === 1 ? '' : 's'}
+        {items.length} item{items.length === 1 ? '' : 's'} · click column header to sort
       </div>
-      <Table cols={cols} rows={items} onRowClick={clickHandler} />
+      <Table cols={cols} rows={items} onRowClick={clickHandler} defaultSort={defaultSort} />
     </>
   );
 }

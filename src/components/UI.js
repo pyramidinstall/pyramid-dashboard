@@ -76,23 +76,90 @@ export function CRBadge({value}){
   const type=value>=0.7?'green':value>=0.45?'amber':'red';
   return <Badge type={type}>{pct}</Badge>;
 }
-export function Table({cols,rows,onRowClick}){
-  return <div style={{overflowX:'auto'}}>
-    <table style={{width:'100%',borderCollapse:'collapse',fontSize:12,tableLayout:'fixed'}}>
-      <thead><tr>{cols.map(c=><th key={c.key} style={{textAlign:'left',fontWeight:600,color:C.textMuted,fontSize:11,padding:'4px 6px 8px 0',borderBottom:`0.5px solid ${C.border}`,width:c.width}}>{c.label}</th>)}</tr></thead>
-      <tbody>{rows.map((row,ri)=>(
-        <tr key={ri} onClick={()=>onRowClick&&onRowClick(row)}
-          style={{cursor:onRowClick?'pointer':'default',background:ri%2===1?'#fafafa':'transparent'}}
-          onMouseEnter={e=>onRowClick&&(e.currentTarget.style.background='#f0f7ff')}
-          onMouseLeave={e=>(e.currentTarget.style.background=ri%2===1?'#fafafa':'transparent')}>
-          {cols.map(c=><td key={c.key} style={{padding:'6px 6px 6px 0',borderBottom:`0.5px solid ${C.border}`,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-            {c.render?c.render(row[c.key],row):row[c.key]}
-          </td>)}
-        </tr>
-      ))}
-      {rows.length===0&&<tr><td colSpan={cols.length} style={{padding:'20px 0',textAlign:'center',color:C.textMuted}}>No data</td></tr>}
-      </tbody>
-    </table>
+export function Table({cols,rows,onRowClick,defaultSort,searchable=true}){
+  const [sortKey, setSortKey] = React.useState(defaultSort?.key || null);
+  const [sortDir, setSortDir] = React.useState(defaultSort?.dir || 'asc');
+  const [filter, setFilter] = React.useState('');
+
+  // Filter rows
+  const filtered = React.useMemo(() => {
+    if (!filter.trim()) return rows;
+    const q = filter.toLowerCase();
+    return rows.filter(r => cols.some(c => {
+      const v = r[c.key];
+      if (v === null || v === undefined) return false;
+      return String(v).toLowerCase().includes(q);
+    }));
+  }, [rows, filter, cols]);
+
+  // Sort rows
+  const sorted = React.useMemo(() => {
+    if (!sortKey) return filtered;
+    const sgn = sortDir === 'asc' ? 1 : -1;
+    return [...filtered].sort((a, b) => {
+      const av = a[sortKey], bv = b[sortKey];
+      if (av === null || av === undefined) return 1;
+      if (bv === null || bv === undefined) return -1;
+      // Numeric compare if both are numbers
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * sgn;
+      // Date-like strings compare lexically too (YYYY-MM-DD or MM/DD/YYYY)
+      return String(av).localeCompare(String(bv)) * sgn;
+    });
+  }, [filtered, sortKey, sortDir]);
+
+  const handleHeaderClick = (key) => {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key); setSortDir('asc'); }
+  };
+
+  return <div>
+    {searchable && rows.length > 5 && (
+      <div style={{marginBottom:8,display:'flex',alignItems:'center',gap:8}}>
+        <input
+          type="text"
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+          placeholder="Filter..."
+          style={{
+            flex:1, padding:'5px 9px', fontSize:12,
+            border:`0.5px solid ${C.border}`, borderRadius:4,
+            background:'#fff', color:C.text, outline:'none',
+          }}
+        />
+        {filter && <span style={{fontSize:11,color:C.textMuted}}>{sorted.length} of {rows.length}</span>}
+      </div>
+    )}
+    <div style={{overflowX:'auto'}}>
+      <table style={{width:'100%',borderCollapse:'collapse',fontSize:12,tableLayout:'fixed'}}>
+        <thead><tr>{cols.map(c => {
+          const active = sortKey === c.key;
+          return <th key={c.key}
+            onClick={() => handleHeaderClick(c.key)}
+            style={{
+              textAlign:'left', fontWeight:600, color: active ? C.text : C.textMuted,
+              fontSize:11, padding:'4px 6px 8px 0',
+              borderBottom: `0.5px solid ${active ? C.text : C.border}`,
+              width:c.width, cursor:'pointer', userSelect:'none',
+              whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+            }}>
+            {c.label}
+            {active && <span style={{marginLeft:4,fontSize:9}}>{sortDir === 'asc' ? '▲' : '▼'}</span>}
+          </th>;
+        })}</tr></thead>
+        <tbody>{sorted.map((row,ri)=>(
+          <tr key={ri} onClick={()=>onRowClick&&onRowClick(row)}
+            style={{cursor:onRowClick?'pointer':'default',background:ri%2===1?'#fafafa':'transparent'}}
+            onMouseEnter={e=>onRowClick&&(e.currentTarget.style.background='#f0f7ff')}
+            onMouseLeave={e=>(e.currentTarget.style.background=ri%2===1?'#fafafa':'transparent')}>
+            {cols.map(c=><td key={c.key} style={{padding:'6px 6px 6px 0',borderBottom:`0.5px solid ${C.border}`,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+              {c.render?c.render(row[c.key],row):row[c.key]}
+            </td>)}
+          </tr>
+        ))}
+        {sorted.length===0&&<tr><td colSpan={cols.length} style={{padding:'20px 0',textAlign:'center',color:C.textMuted}}>{filter ? 'No matches' : 'No data'}</td></tr>}
+        </tbody>
+      </table>
+    </div>
   </div>;
 }
 export function Modal({title,onClose,children,wide}){
