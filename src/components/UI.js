@@ -47,6 +47,15 @@ export function Spinner(){
     <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
   </div>;
 }
+export function InfoTooltip({children}){
+  return <span style={{position:'relative',display:'inline-block'}} className="pyr-tip-wrap">
+    <span style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:14,height:14,borderRadius:'50%',background:'#f0f2f5',color:C.textMuted,fontSize:10,fontWeight:600,cursor:'help',marginLeft:4,verticalAlign:'middle',border:`0.5px solid ${C.border}`,fontFamily:'serif'}}>i</span>
+    <span className="pyr-tip" style={{visibility:'hidden',opacity:0,position:'absolute',bottom:'calc(100% + 6px)',left:'50%',transform:'translateX(-50%)',background:'#2C2C2A',color:'#F1EFE8',fontSize:11,lineHeight:1.5,fontWeight:400,padding:'8px 10px',borderRadius:6,whiteSpace:'normal',width:280,zIndex:1000,transition:'opacity 0.15s',pointerEvents:'none',textTransform:'none',letterSpacing:'normal'}}>
+      {children}
+    </span>
+    <style>{`.pyr-tip-wrap:hover .pyr-tip{visibility:visible !important;opacity:1 !important;}`}</style>
+  </span>;
+}
 export function TrendArrow({values}){
   if (!values||values.length<2) return <span style={{color:C.textMuted}}>—</span>;
   const last=values[values.length-1], prev=values[values.length-2];

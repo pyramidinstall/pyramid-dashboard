@@ -82,8 +82,10 @@ function getBacklogConf(status, daysInStatus) {
 }
 
 // ── CLOSE RATE CALCULATOR ────────────────────────────────────
+// Uses PM×cohort intersection with fallback chain, dollar-weighted
 function buildCloseRates(orders) {
-  const pm = {}, dealer = {}, cohort = {};
+  // Buckets track dollar-weighted win rates: won$ / (won$ + lost$)
+  const pmCohort = {}, pm = {}, dealerCohort = {}, dealer = {}, cohort = {};
 
   orders.forEach(r => {
     if (r.channel !== 'Non-INET') return;
@@ -92,29 +94,50 @@ function buildCloseRates(orders) {
 
     const inc = (map, key) => {
       if (!key) return;
-      if (!map[key]) map[key] = { won: 0, decided: 0 };
-      map[key].decided++;
-      if (r.isWon) map[key].won++;
+      if (!map[key]) map[key] = { wonD: 0, lostD: 0, wonN: 0, decidedN: 0 };
+      map[key].decidedN++;
+      if (r.isWon) { map[key].wonD += r.gt; map[key].wonN++; }
+      else         { map[key].lostD += r.gt; }
     };
-    inc(pm, r.pm);
-    inc(dealer, r.customer);
-    inc(cohort, r.cohort);
+    if (r.pm && r.cohort)        inc(pmCohort, `${r.pm}|${r.cohort}`);
+    if (r.pm)                    inc(pm, r.pm);
+    if (r.customer && r.cohort)  inc(dealerCohort, `${r.customer}|${r.cohort}`);
+    if (r.customer)              inc(dealer, r.customer);
+    if (r.cohort)                inc(cohort, r.cohort);
   });
 
-  const rate = (map, key, min = 5) => {
+  // Dollar-weighted rate with minimum sample size
+  const rate = (map, key, minDecided) => {
     const d = map[key];
-    if (!d || d.decided < min) return null;
-    return d.won / d.decided;
+    if (!d || d.decidedN < minDecided) return null;
+    const denom = d.wonD + d.lostD;
+    if (denom <= 0) return null;
+    return d.wonD / denom;
   };
 
   return {
+    // Returns { rate, source } — source identifies which fallback tier produced the rate
     getRate: (pmName, dealerName, cohortName, isInet) => {
-      if (isInet) return 0.778;
-      return rate(pm, pmName) ??
-             rate(dealer, dealerName) ??
-             rate(cohort, cohortName) ??
-             0.40;
-    }
+      if (isInet) return { rate: 0.778, source: 'INET fixed' };
+      // Priority: PM×cohort (3+) → PM (5+) → dealer×cohort (5+) → dealer (5+) → cohort (5+) → default
+      let r;
+      if ((r = rate(pmCohort, `${pmName}|${cohortName}`, 3)) !== null)       return { rate: r, source: 'PM×cohort' };
+      if ((r = rate(pm, pmName, 5)) !== null)                                 return { rate: r, source: 'PM' };
+      if ((r = rate(dealerCohort, `${dealerName}|${cohortName}`, 5)) !== null) return { rate: r, source: 'Dealer×cohort' };
+      if ((r = rate(dealer, dealerName, 5)) !== null)                         return { rate: r, source: 'Dealer' };
+      if ((r = rate(cohort, cohortName, 5)) !== null)                         return { rate: r, source: 'Cohort' };
+      return { rate: 0.30, source: 'Default' };
+    },
+    // Cohort-level dollar-weighted rates for forecasting future quotes
+    cohortRates: () => {
+      const out = {};
+      Object.keys(cohort).forEach(k => {
+        const d = cohort[k];
+        const denom = d.wonD + d.lostD;
+        out[k] = denom > 0 ? d.wonD / denom : 0;
+      });
+      return out;
+    },
   };
 }
 
@@ -151,6 +174,8 @@ function enrichOrders(rawOrders) {
       const daysInStatus = statusStart ? daysSinceToday(statusStart) : null;
       const daysPresented = r.lqp_start_date ? daysSinceToday(r.lqp_start_date) : null;
       const daysToExpiry = r.expiry_date ? daysUntilToday(r.expiry_date) : null;
+      // Formal quote = went through LQP stage (has lqp_start_date). Excludes ad-hoc T&M orders.
+      const isFormalQuote = !!r.lqp_start_date;
 
       const dinv = parseNum(r.dollars_invoiced);
       const remaining = isBacklog ? Math.max(0, gt - dinv) || (gt > 0 ? gt : 0) : null;
@@ -159,20 +184,22 @@ function enrichOrders(rawOrders) {
         ...r,
         gt, isInet, isSkyline, isOpen, isWon, isLost,
         isDecided: isWon || isLost,
-        isBacklog, yearBucket, quarter, cohort,
+        isBacklog, yearBucket, quarter, cohort, isFormalQuote,
         channel: isInet ? 'INSTALL Net' : 'Non-INET',
         daysInStatus, daysPresented, daysToExpiry, remaining,
       };
     });
 
   // Build close rates from pass1 data
-  const cr = buildCloseRates(pass1);
+  const cr_calc = buildCloseRates(pass1);
 
   // Second pass — add weighted values
   return pass1.map(r => {
-    let pipelineCR = null, pipelineWeighted = null;
+    let pipelineCR = null, pipelineWeighted = null, pipelineCRSource = null;
     if (r.isOpen) {
-      pipelineCR = cr.getRate(r.pm, r.customer, r.cohort, r.isInet);
+      const cr = cr_calc.getRate(r.pm, r.customer, r.cohort, r.isInet);
+      pipelineCR = cr.rate;
+      pipelineCRSource = cr.source;
       pipelineWeighted = Math.round(r.gt * pipelineCR);
     }
 
@@ -192,7 +219,7 @@ function enrichOrders(rawOrders) {
 
     return {
       ...r,
-      pipelineCR, pipelineWeighted,
+      pipelineCR, pipelineWeighted, pipelineCRSource,
       backlogTier, backlogConf, backlogWeighted,
       expiryAlert,
     };
@@ -336,94 +363,372 @@ export function useOverviewData(data) {
     if (!data) return null;
     const { orders, invoices, unpaid, installnet } = data;
 
+    // ── REVENUE COLLECTED ────────────────────────────────────
     const yr1Rev = invoices.filter(r => r.yearBucket === 'Year 1').reduce((s,r) => s+r.gt, 0);
     const yr2Rev = invoices.filter(r => r.yearBucket === 'Year 2').reduce((s,r) => s+r.gt, 0);
     const dayOfYear2 = Math.max(1, Math.floor((TODAY - YEAR2_START) / 86400000) + 1);
+    const daysRemaining = Math.max(0, 365 - dayOfYear2);
 
-    // AR — invoiced but not yet paid (high confidence, ~98%)
+    // ── AR (invoiced, unpaid) ────────────────────────────────
     const arTotal = (unpaid || []).reduce((s,r) => s + r.gt, 0);
     const arWeighted = Math.round(arTotal * 0.98);
     const arOverdue = (unpaid || []).filter(r => r.isOverdue);
+    const arOverdueTotal = arOverdue.reduce((s,r) => s + r.gt, 0);
 
-    // Monthly revenue Year 1
-    const monthlyMap = {};
-    invoices.filter(r => r.yearBucket === 'Year 1').forEach(r => {
-      if (r.month) monthlyMap[r.month] = (monthlyMap[r.month] || 0) + r.gt;
-    });
-    const monthly = Object.entries(monthlyMap).sort(([a],[b]) => a.localeCompare(b))
-      .map(([month, revenue]) => ({
-        label: new Date(month + '-01').toLocaleString('default', { month: 'short' }),
-        revenue: Math.round(revenue),
-      }));
-
-    // Concentration
-    const custY1 = {}, custY2 = {}, custPipe = {};
-    invoices.filter(r => r.yearBucket === 'Year 1').forEach(r => {
-      custY1[r.customer] = (custY1[r.customer] || 0) + r.gt;
-    });
-    invoices.filter(r => r.yearBucket === 'Year 2').forEach(r => {
-      custY2[r.customer] = (custY2[r.customer] || 0) + r.gt;
-    });
-    orders.filter(r => r.isOpen).forEach(r => {
-      custPipe[r.customer] = (custPipe[r.customer] || 0) + r.gt;
-    });
-    // INET open pipeline
-    installnet.filter(r => r.isOpenPipeline).forEach(r => {
-      if (r.price > 0) custPipe['INSTALL Net'] = (custPipe['INSTALL Net'] || 0) + r.price;
-    });
-
-    const totalPipe = Object.values(custPipe).reduce((s,v) => s+v, 0);
-    const concentration = Object.entries(custY1).sort(([,a],[,b]) => b-a).slice(0,10)
-      .map(([customer, y1Rev]) => ({
-        customer: customer.length > 22 ? customer.slice(0,22)+'…' : customer,
-        y1Rev: Math.round(y1Rev), y1Pct: y1Rev / Math.max(yr1Rev, 1),
-        y2Rev: Math.round(custY2[customer] || 0),
-        y2Pct: (custY2[customer] || 0) / Math.max(yr2Rev, 1),
-        pipePct: (custPipe[customer] || 0) / Math.max(totalPipe, 1),
-        pipeVal: Math.round(custPipe[customer] || 0),
-      }));
-
-    // Active sources
-    const cutoff90 = new Date(TODAY - 90 * 86400000);
-    const recentQ = orders.filter(r => new Date(r.created_date) >= cutoff90 && (r.isOpen || r.isWon));
-    const activePMs = new Set(recentQ.map(r => r.pm).filter(Boolean)).size;
-    const activeDealers = new Set(recentQ.map(r => r.customer).filter(Boolean)).size;
-
-    // Pipeline
-    const openOrders = orders.filter(r => r.isOpen && !r.isInet);
-    const pipelineFace = openOrders.reduce((s,r) => s + r.gt, 0);
-    const pipelineWeighted = openOrders.reduce((s,r) => s + (r.pipelineWeighted || 0), 0);
+    // ── PIPELINE (open quotes, weighted) ─────────────────────
+    // Non-INET non-XL gets cohort/PM weighting. XL excluded from forecast.
+    const openNonInet = orders.filter(r => r.isOpen && !r.isInet);
+    const openNonInetExXL = openNonInet.filter(r => r.cohort !== 'XL $50K+');
+    const pipelineFaceExXL = openNonInetExXL.reduce((s,r) => s + r.gt, 0);
+    const pipelineWeightedExXL = openNonInetExXL.reduce((s,r) => s + (r.pipelineWeighted || 0), 0);
     const inetPipelineFace = installnet.filter(r => r.isOpenPipeline).reduce((s,r) => s + r.price, 0);
     const inetPipelineWeighted = Math.round(inetPipelineFace * 0.778);
+    const pipelineFace = pipelineFaceExXL + inetPipelineFace;
+    const pipelineWeighted = pipelineWeightedExXL + inetPipelineWeighted;
 
-    // Jobs in flight
+    // ── JOBS IN FLIGHT (won, awaiting invoicing, weighted) ───
     const rtiOrders = orders.filter(r => r.status === 'Ready to Invoice');
     const rtiValue = rtiOrders.filter(r => (r.daysInStatus || 0) <= 30)
       .reduce((s,r) => s + (r.remaining || r.gt), 0);
     const backlogOrders = orders.filter(r => r.isBacklog && r.status !== 'Ready to Invoice');
     const backlogFace = backlogOrders.reduce((s,r) => s + (r.remaining || 0), 0);
     const backlogWeighted = backlogOrders.reduce((s,r) => s + (r.backlogWeighted || 0), 0);
-    const skyline = 40000;
+    // Skyline: T&M job with ~$10K/mo and 2-3 months remaining
+    const skylineRemaining = 30000;
+    const flightFace = rtiValue + backlogFace + skylineRemaining;
+    const flightWeighted = Math.round(rtiValue * 0.95 + backlogWeighted + skylineRemaining * 0.90);
+
+    // ── COMMITTED = Collected + AR + In Flight + Pipeline ───
+    const committed = yr2Rev + arWeighted + flightWeighted + pipelineWeighted;
+
+    // ── FUTURE QUOTE FORECAST (scenarios) ───────────────────
+    // Base: Year 1 monthly quote flow × cohort dollar-weighted CRs × months remaining (capped by 86-day sales cycle)
+    // Bear: 2nd-worst month of Year 1 applied same way
+    // Bull: trailing 90-day pace, only if > Year 1 avg
+    const NON_INET_SALES_CYCLE_DAYS = 86;
+    const INET_SALES_CYCLE_DAYS = 37;
+    // Quotes created after day (365 - cycle) won't convert to Year 2 revenue
+    const nonInetEffectiveDays = Math.max(0, Math.min(daysRemaining, 365 - NON_INET_SALES_CYCLE_DAYS - dayOfYear2));
+    const inetEffectiveDays    = Math.max(0, Math.min(daysRemaining, 365 - INET_SALES_CYCLE_DAYS - dayOfYear2));
+
+    // Compute Year 1 monthly non-INET formal quote dollars by cohort (ex-XL)
+    const y1NonInetFormal = orders.filter(r =>
+      r.yearBucket === 'Year 1' && !r.isInet && r.isFormalQuote && r.cohort !== 'XL $50K+'
+    );
+    const y1MonthlyByCohort = {}; // cohort -> { [month]: dollars }
+    y1NonInetFormal.forEach(r => {
+      const d = new Date(r.created_date);
+      if (isNaN(d)) return;
+      const mkey = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+      if (!y1MonthlyByCohort[r.cohort]) y1MonthlyByCohort[r.cohort] = {};
+      y1MonthlyByCohort[r.cohort][mkey] = (y1MonthlyByCohort[r.cohort][mkey] || 0) + r.gt;
+    });
+    // Base monthly cohort quote dollars (12-month average)
+    const baseCohortQuoteMo = {};
+    // Bear monthly cohort quote dollars (2nd-worst total month scaled)
+    const cohortLabels = ['XS <$1K','S $1K-5K','M $5K-15K','L $15K-50K'];
+    cohortLabels.forEach(c => {
+      const m = y1MonthlyByCohort[c] || {};
+      const vals = Object.values(m);
+      const total = vals.reduce((s,v) => s+v, 0);
+      baseCohortQuoteMo[c] = total / 12;
+    });
+
+    // Year 1 total monthly quote dollars (non-INET ex-XL, all cohorts)
+    const y1TotalByMonth = {};
+    y1NonInetFormal.forEach(r => {
+      const d = new Date(r.created_date);
+      if (isNaN(d)) return;
+      const mkey = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+      y1TotalByMonth[mkey] = (y1TotalByMonth[mkey] || 0) + r.gt;
+    });
+    const y1MonthlyTotals = Object.values(y1TotalByMonth).sort((a,b) => a-b);
+    const y1AvgMonthly = y1MonthlyTotals.reduce((s,v) => s+v, 0) / Math.max(y1MonthlyTotals.length, 1);
+    const y1SecondWorstMonthly = y1MonthlyTotals.length >= 2 ? y1MonthlyTotals[1] : (y1MonthlyTotals[0] || 0);
+
+    // Cohort dollar-weighted close rates
+    const cr_calc = buildCloseRates(orders);
+    const cohortCRs = cr_calc.cohortRates();
+
+    // Base monthly expected revenue from non-INET future quotes
+    const baseMoExpected = cohortLabels.reduce((s, c) => {
+      const qMo = baseCohortQuoteMo[c] || 0;
+      const cr = cohortCRs[c] || 0.30;
+      return s + qMo * cr;
+    }, 0);
+    // Bear: use 2nd-worst month as proxy, distribute across cohorts proportionally
+    const y1AvgMoTotal = Object.values(baseCohortQuoteMo).reduce((s,v) => s+v, 0);
+    const bearScale = y1AvgMoTotal > 0 ? y1SecondWorstMonthly / y1AvgMoTotal : 0;
+    const bearMoExpected = baseMoExpected * bearScale;
+
+    // INET: Year 1 revenue avg / 12 ≈ $70K/mo actual collected
+    const y1InetRev = invoices.filter(r => r.yearBucket === 'Year 1' && r.channel === 'INSTALL Net').reduce((s,r) => s+r.gt, 0);
+    const inetMoExpected = y1InetRev / 12;
+
+    // Compute future revenue (ex-XL, from quotes not yet sent)
+    const nonInetEffectiveMonths = nonInetEffectiveDays / 30;
+    const inetEffectiveMonths    = inetEffectiveDays / 30;
+
+    const baseFuture = baseMoExpected * nonInetEffectiveMonths + inetMoExpected * inetEffectiveMonths;
+    const bearFuture = bearMoExpected * nonInetEffectiveMonths + inetMoExpected * inetEffectiveMonths * 0.7;
+
+    // Bull: trailing 90-day non-INET formal pace
+    const cutoff90 = new Date(TODAY - 90 * 86400000);
+    const trailing90 = y1NonInetFormal.concat(
+      orders.filter(r => r.yearBucket === 'Year 2' && !r.isInet && r.isFormalQuote && r.cohort !== 'XL $50K+')
+    ).filter(r => new Date(r.created_date) >= cutoff90);
+    const trailing90Dollars = trailing90.reduce((s,r) => s+r.gt, 0);
+    const trailing90MoDollars = trailing90Dollars / 3;
+    // Scale bull only if > Y1 avg
+    const bullScale = trailing90MoDollars > y1AvgMonthly ? trailing90MoDollars / y1AvgMonthly : 1.0;
+    const bullMoExpected = baseMoExpected * bullScale;
+    const bullFuture = bullMoExpected * nonInetEffectiveMonths + inetMoExpected * inetEffectiveMonths * 1.1;
+
+    // Forecast totals = committed + future
+    const forecastBase = committed + baseFuture;
+    const forecastBear = committed + bearFuture;
+    const forecastBull = committed + bullFuture;
+
+    // Coverage: how many months of $3M target does committed cover?
+    const monthlyTarget = 3000000 / 12;
+    const coverageMonths = committed / monthlyTarget;
+
+    // ── XL BOUNTY (open $50K+ non-INET quotes) ───────────────
+    const xlBounty = orders
+      .filter(r => r.isOpen && !r.isInet && r.gt >= 50000)
+      .sort((a,b) => b.gt - a.gt)
+      .map(r => ({
+        order_number: r.order_number,
+        order_name: r.order_name,
+        customer: r.customer,
+        pm: r.pm,
+        gt: r.gt,
+      }));
+
+    // ── MOMENTUM (last 30 days) ──────────────────────────────
+    const cutoff30 = new Date(TODAY - 30 * 86400000);
+    // All formal quotes (non-INET formal + INET)
+    const nonInetFormal30 = orders.filter(r =>
+      !r.isInet && r.isFormalQuote && new Date(r.created_date) >= cutoff30
+    );
+    const inet30 = installnet.filter(r => r.date_requested && new Date(r.date_requested) >= cutoff30);
+    const totalQuotes30 = nonInetFormal30.length + inet30.length;
+    const totalQuotesDollars30 = nonInetFormal30.reduce((s,r) => s+r.gt, 0) +
+                                 inet30.reduce((s,r) => s+r.price, 0);
+
+    // Year 1 monthly averages for comparison
+    const y1NonInetFormalCount = y1NonInetFormal.length;
+    const y1InetCount = installnet.filter(r => r.yearBucket === 'Year 1').length;
+    const y1MonthlyTotalQuotes = (y1NonInetFormalCount + y1InetCount) / 12;
+    const y1MonthlyNonInetFormal = y1NonInetFormalCount / 12;
+
+    const totalQuotesDelta = y1MonthlyTotalQuotes > 0
+      ? (totalQuotes30 - y1MonthlyTotalQuotes) / y1MonthlyTotalQuotes : 0;
+    const nonInetQuotesDelta = y1MonthlyNonInetFormal > 0
+      ? (nonInetFormal30.length - y1MonthlyNonInetFormal) / y1MonthlyNonInetFormal : 0;
+
+    // New PMs in last 30 days (first-ever quote anywhere in our data)
+    const pmFirstSeen = {};
+    orders.forEach(r => {
+      if (!r.pm) return;
+      const d = new Date(r.created_date);
+      if (isNaN(d)) return;
+      if (!pmFirstSeen[r.pm] || d < pmFirstSeen[r.pm]) pmFirstSeen[r.pm] = d;
+    });
+    const newPMs30 = Object.entries(pmFirstSeen)
+      .filter(([, d]) => d >= cutoff30)
+      .map(([pm]) => pm);
+
+    // New dealers in last 60 days
+    const cutoff60 = new Date(TODAY - 60 * 86400000);
+    const dealerFirstSeen = {};
+    orders.forEach(r => {
+      if (!r.customer) return;
+      const d = new Date(r.created_date);
+      if (isNaN(d)) return;
+      if (!dealerFirstSeen[r.customer] || d < dealerFirstSeen[r.customer]) dealerFirstSeen[r.customer] = d;
+    });
+    const newDealers60 = Object.entries(dealerFirstSeen)
+      .filter(([, d]) => d >= cutoff60)
+      .map(([c]) => c);
+
+    // ── ATTENTION LIST (data-resolved) ────────────────────────
+    // L+ quotes expiring within 14 days
+    const expiring14 = orders.filter(r =>
+      r.isOpen && r.gt >= 15000 && r.daysToExpiry !== null && r.daysToExpiry >= 0 && r.daysToExpiry <= 14
+    );
+    const expiring14Names = [...new Set(expiring14.map(r => (r.customer || '').split(' ')[0]))].slice(0, 4).join(', ');
+
+    // RTI > 7 days
+    const rtiOver7 = orders.filter(r =>
+      r.status === 'Ready to Invoice' && (r.daysInStatus || 0) > 7
+    );
+
+    // AR past due (using unpaid with isOverdue)
+    const arOverdueValue = arOverdue.reduce((s,r) => s+r.gt, 0);
+
+    // Cold PMs — PM silent for 21+ days (last quote > 21 days ago, had quotes in prior 90 days)
+    const pmLastSeen = {};
+    orders.forEach(r => {
+      if (!r.pm || !r.created_date) return;
+      const d = new Date(r.created_date);
+      if (isNaN(d)) return;
+      if (!pmLastSeen[r.pm] || d > pmLastSeen[r.pm]) pmLastSeen[r.pm] = d;
+    });
+    const cutoff21 = new Date(TODAY - 21 * 86400000);
+    const cutoff112 = new Date(TODAY - 112 * 86400000); // 21 + 91 days
+    const coldPMs = Object.entries(pmLastSeen).filter(([pm, lastDate]) => {
+      if (lastDate >= cutoff21) return false; // not silent
+      if (lastDate < cutoff112) return false; // been gone too long to count as "going cold"
+      // had 3+ quotes in Year 1 (active relationship)
+      const y1Count = orders.filter(r => r.pm === pm && r.yearBucket === 'Year 1').length;
+      return y1Count >= 3;
+    }).map(([pm]) => pm);
+
+    // Approved orders aging 90+ days
+    const approvedAging90 = orders.filter(r =>
+      r.status === 'Approved Order' && (r.daysInStatus || 0) > 90
+    );
+    const approvedAging90Value = approvedAging90.reduce((s,r) => s + (r.remaining || r.gt), 0);
+
+    // Dealers going cold — dealer with 3+ Year 1 quotes but no quote in 60 days
+    const dealerLastSeen = {};
+    orders.forEach(r => {
+      if (!r.customer || !r.created_date || r.isInet) return;
+      const d = new Date(r.created_date);
+      if (isNaN(d)) return;
+      if (!dealerLastSeen[r.customer] || d > dealerLastSeen[r.customer]) dealerLastSeen[r.customer] = d;
+    });
+    const coldDealers = Object.entries(dealerLastSeen).filter(([c, lastDate]) => {
+      if (lastDate >= cutoff60) return false;
+      const y1Count = orders.filter(r => r.customer === c && r.yearBucket === 'Year 1').length;
+      return y1Count >= 3;
+    }).map(([c]) => c);
+
+    const attentionList = [
+      { key:'expiring14', severity:'red', count:expiring14.length,
+        label:'L+ quotes expiring within 14 days',
+        detail:expiring14Names || 'see Pipeline page',
+        amount:expiring14.reduce((s,r) => s+r.gt, 0),
+        show: expiring14.length > 0 },
+      { key:'rti7', severity:'red', count:rtiOver7.length,
+        label:'Ready to invoice over 7 days old',
+        detail:'process and send invoices today',
+        amount:rtiOver7.reduce((s,r) => s + (r.remaining || r.gt), 0),
+        show: rtiOver7.length > 0 },
+      { key:'ar', severity:'red', count:arOverdue.length,
+        label:'Invoices past due date',
+        detail:'collect payment',
+        amount:arOverdueValue,
+        show: arOverdue.length > 0 },
+      { key:'coldPM', severity:'amber', count:coldPMs.length,
+        label:'PMs silent 21+ days',
+        detail: coldPMs.slice(0,5).map(p => {
+          const parts = p.split(' ');
+          return parts[0].charAt(0) + parts[0].slice(1).toLowerCase();
+        }).join(', ') || 'see Relationships',
+        amount:null, amountLabel:'reach out',
+        show: coldPMs.length > 0 },
+      { key:'aging90', severity:'amber', count:approvedAging90.length,
+        label:'Approved orders aging 90+ days',
+        detail:'status check, confirm still active',
+        amount:approvedAging90Value,
+        show: approvedAging90.length > 0 },
+      { key:'coldDealers', severity:'amber', count:coldDealers.length,
+        label:'Dealers going cold',
+        detail: coldDealers.slice(0,3).join(', ') || 'monitor',
+        amount:null, amountLabel:'priority',
+        show: coldDealers.length > 0 },
+    ].filter(x => x.show);
+
+    // ── CONCENTRATION (simplified) ───────────────────────────
+    const custY1 = {}, custY2 = {};
+    invoices.filter(r => r.yearBucket === 'Year 1').forEach(r => {
+      custY1[r.customer] = (custY1[r.customer] || 0) + r.gt;
+    });
+    invoices.filter(r => r.yearBucket === 'Year 2').forEach(r => {
+      custY2[r.customer] = (custY2[r.customer] || 0) + r.gt;
+    });
+    const concentration = Object.entries(custY1).sort(([,a],[,b]) => b-a).slice(0,5)
+      .map(([customer, y1v]) => {
+        const y2v = custY2[customer] || 0;
+        const y1Pct = y1v / Math.max(yr1Rev, 1);
+        const y2Pct = y2v / Math.max(yr2Rev, 1);
+        return {
+          customer: customer.length > 22 ? customer.slice(0,22)+'…' : customer,
+          y1Rev: Math.round(y1v), y1Pct,
+          y2Rev: Math.round(y2v), y2Pct,
+          trend: customer.toUpperCase().includes('SKYLINE') ? 'tm-ends'
+               : y2v === 0 ? 'neutral'
+               : y2Pct > y1Pct + 0.05 ? 'up'
+               : y2Pct < y1Pct - 0.05 ? 'down' : 'neutral',
+        };
+      });
+
+    // New PMs and dealers — Year 1 growth story (3+ quotes, clean)
+    const y1PMsByCount = {};
+    orders.filter(r => r.yearBucket === 'Year 1' && !r.isInet).forEach(r => {
+      if (r.pm) y1PMsByCount[r.pm] = (y1PMsByCount[r.pm] || 0) + 1;
+    });
+    const preAcqPMs = new Set(
+      orders.filter(r => r.yearBucket === 'Pre-acquisition' && !r.isInet && r.pm).map(r => r.pm)
+    );
+    const newPMsY1 = Object.entries(y1PMsByCount)
+      .filter(([pm, c]) => !preAcqPMs.has(pm) && c >= 3).length;
+
+    const y1DealersByCount = {};
+    orders.filter(r => r.yearBucket === 'Year 1' && !r.isInet).forEach(r => {
+      if (r.customer) y1DealersByCount[r.customer] = (y1DealersByCount[r.customer] || 0) + 1;
+    });
+    const preAcqDealers = new Set(
+      orders.filter(r => r.yearBucket === 'Pre-acquisition' && !r.isInet && r.customer).map(r => r.customer)
+    );
+    const newDealersY1 = Object.entries(y1DealersByCount)
+      .filter(([d, c]) => !preAcqDealers.has(d) && c >= 3).length;
 
     return {
-      yr1Rev, yr2Rev, dayOfYear2, monthly, concentration, activePMs, activeDealers,
-      pipelineFace: Math.round(pipelineFace + inetPipelineFace),
-      pipelineWeighted: Math.round(pipelineWeighted + inetPipelineWeighted),
-      nonInetPipelineFace: Math.round(pipelineFace),
-      nonInetPipelineWeighted: Math.round(pipelineWeighted),
-      inetPipelineFace: Math.round(inetPipelineFace),
-      inetPipelineWeighted,
-      totalFlightFace: Math.round(rtiValue + backlogFace + skyline),
-      totalFlightWeighted: Math.round(rtiValue * 0.95 + backlogWeighted + skyline * 0.95),
+      // Year context
+      yr1Rev, yr2Rev, dayOfYear2, daysRemaining,
+
+      // Year 2 forecast
+      forecastBase: Math.round(forecastBase),
+      forecastBear: Math.round(forecastBear),
+      forecastBull: Math.round(forecastBull),
+      committed: Math.round(committed),
+      futureBase: Math.round(baseFuture),
+      coverageMonths,
+      pctOfTarget: forecastBase / 3000000,
+
+      // Composition (for the bar)
+      arTotal: Math.round(arTotal), arWeighted,
+      flightFace: Math.round(flightFace),
+      flightWeighted: Math.round(flightWeighted),
       rtiValue: Math.round(rtiValue),
       backlogFace: Math.round(backlogFace),
-      skyline,
-      arTotal: Math.round(arTotal), arWeighted, arOverdue,
-      totalForwardFace: Math.round(pipelineFace + inetPipelineFace + rtiValue + backlogFace + skyline),
-      totalForwardWeighted: Math.round(pipelineWeighted + inetPipelineWeighted + rtiValue * 0.95 + backlogWeighted + skyline * 0.95),
-      // Full Year 2 picture: collected + AR + in flight + pipeline
-      yr2TotalFace: Math.round(yr2Rev + arTotal + rtiValue + backlogFace + pipelineFace + inetPipelineFace + skyline),
-      yr2TotalWeighted: Math.round(yr2Rev + arWeighted + rtiValue * 0.95 + backlogWeighted + pipelineWeighted + inetPipelineWeighted + skyline * 0.95),
+      skyline: skylineRemaining,
+      pipelineFace: Math.round(pipelineFace),
+      pipelineWeighted: Math.round(pipelineWeighted),
+
+      // XL bounty
+      xlBounty,
+      xlBountyFace: xlBounty.reduce((s,r) => s+r.gt, 0),
+
+      // Momentum
+      totalQuotes30, totalQuotesDollars30: Math.round(totalQuotesDollars30),
+      totalQuotesDelta,
+      nonInetFormalQuotes30: nonInetFormal30.length,
+      nonInetQuotesDelta,
+      newPMs30: newPMs30.length,
+      newDealers60: newDealers60.length,
+      y1MonthlyTotalQuotes: Math.round(y1MonthlyTotalQuotes),
+      y1MonthlyNonInetFormal: Math.round(y1MonthlyNonInetFormal),
+
+      // Attention
+      attentionList,
+
+      // Concentration & growth story
+      concentration,
+      newPMsY1, newDealersY1,
     };
   }, [data]);
 }

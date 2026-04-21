@@ -1,199 +1,266 @@
-import React, { useState } from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { Card, CardTitle, MetricCard, SectionLabel, Grid, Alert, Badge, Table, Insight, C } from '../components/UI';
+import React from 'react';
+import { C, InfoTooltip } from '../components/UI';
 import { useOverviewData } from '../utils/dataHooks';
-import { fmtCurrency, fmtPct, parseNum } from '../utils/sheets';
-
-const ENGINES = [
-  { label:'INSTALL Net', sub:'$40K/mo avg · 77.8% SP win rate', val:'$485K/yr', pct:55, color:C.blue },
-  { label:'Non-INET base (XS/S/M)', sub:'~$50K/mo · most predictable layer', val:'$606K/yr', pct:68, color:C.purple },
-  { label:'Non-INET large (L cohort)', sub:'~$55K/mo · primary growth lever', val:'$662K/yr', pct:74, color:C.amber },
-  { label:'Skyline Windows (T&M)', sub:'~4 months remaining · ~$10K/mo', val:'~$40K rem.', pct:13, color:C.gray },
-  { label:'XL jobs ($50K+)', sub:'Not in projection — see Pipeline page', val:'Upside only', pct:5, color:C.red, dashed:true },
-];
+import { fmtCurrency, fmtPct } from '../utils/sheets';
 
 export default function Overview({ data }) {
   const d = useOverviewData(data);
-  const [drillTier, setDrillTier] = useState(null);
   if (!d) return null;
 
-  const tierColors = { 'Imminent':C.green,'On track':C.green,'Slight delay':C.amber,'Check in':C.red,'Follow up':C.red };
-  const backlogOrders = data.orders.filter(r => r.is_backlog === 'TRUE' && r.status !== 'Ready to Invoice');
-  const filteredBacklog = drillTier ? backlogOrders.filter(r => r.backlog_conf_tier === drillTier) : backlogOrders;
+  const coverageText = d.coverageMonths.toFixed(1);
+  const onPace = d.pctOfTarget >= 1.0;
+  const paceText = onPace ? `On pace.` : `Below target.`;
+  const paceDetail = onPace
+    ? `Committed work (${fmtCurrency(d.committed)}) covers ${coverageText} months of target. We have work to do to keep it there — see momentum below.`
+    : `Base forecast is ${fmtPct(d.pctOfTarget)} of $3M target. Committed work covers ${coverageText} months. Gap must come from future quotes.`;
+
+  // Composition percentages
+  const totalComp = d.yr2Rev + d.arWeighted + d.flightWeighted + d.pipelineWeighted + d.futureBase;
+  const pct = (v) => totalComp > 0 ? (v / totalComp) * 100 : 0;
 
   return (
     <div style={{ padding:'20px 24px', maxWidth:1320, margin:'0 auto' }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:14 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16 }}>
         <div>
           <h1 style={{ fontSize:20, fontWeight:700, color:C.text }}>Pyramid Office Solutions — owner dashboard</h1>
           <p style={{ fontSize:12, color:C.textSub, marginTop:2 }}>Jordan Bass · Year 2: Apr 1, 2026 – Mar 31, 2027 · $3M target</p>
         </div>
         <div style={{ textAlign:'right' }}>
           <div style={{ fontSize:24, fontWeight:700, color:C.amber }}>Day {d.dayOfYear2}</div>
-          <div style={{ fontSize:11, color:C.textMuted }}>of Year 2</div>
+          <div style={{ fontSize:11, color:C.textMuted }}>of 365</div>
         </div>
       </div>
 
-      {/* Year 2 full picture — 4 layers */}
-      <div style={{background:'#fff',border:`1.5px solid ${C.green}`,borderRadius:12,padding:'14px 18px',marginBottom:14}}>
-        <div style={{fontSize:11,color:C.textMuted,marginBottom:10,fontWeight:600,textTransform:'uppercase',letterSpacing:'.05em'}}>Year 2 total visibility — Day {d.dayOfYear2} of 365</div>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(5,minmax(0,1fr))',gap:8,marginBottom:10}}>
-          <div style={{background:'#f0f2f5',borderRadius:8,padding:'10px 12px'}}>
-            <div style={{fontSize:10,color:C.textSub,marginBottom:2}}>Collected</div>
-            <div style={{fontSize:18,fontWeight:700,color:C.green}}>{fmtCurrency(d.yr2Rev)}</div>
-            <div style={{fontSize:10,color:C.textMuted}}>In the bank · 100%</div>
-          </div>
-          <div style={{background:'#f0f2f5',borderRadius:8,padding:'10px 12px'}}>
-            <div style={{fontSize:10,color:C.textSub,marginBottom:2}}>AR — invoiced, unpaid</div>
-            <div style={{fontSize:18,fontWeight:700,color:C.blue}}>{fmtCurrency(d.arTotal)}</div>
-            <div style={{fontSize:10,color:C.textMuted}}>{d.arOverdue?.length||0} overdue · 98% conf.</div>
-          </div>
-          <div style={{background:'#f0f2f5',borderRadius:8,padding:'10px 12px'}}>
-            <div style={{fontSize:10,color:C.textSub,marginBottom:2}}>Jobs in flight</div>
-            <div style={{fontSize:18,fontWeight:700,color:'#5DCAA5'}}>{fmtCurrency(d.totalFlightWeighted)}</div>
-            <div style={{fontSize:10,color:C.textMuted}}>{fmtCurrency(d.totalFlightFace)} face · 80–95%</div>
-          </div>
-          <div style={{background:'#f0f2f5',borderRadius:8,padding:'10px 12px'}}>
-            <div style={{fontSize:10,color:C.textSub,marginBottom:2}}>Pipeline</div>
-            <div style={{fontSize:18,fontWeight:700,color:C.amber}}>{fmtCurrency(d.pipelineWeighted)}</div>
-            <div style={{fontSize:10,color:C.textMuted}}>{fmtCurrency(d.pipelineFace)} face · weighted</div>
-          </div>
-          <div style={{background:'#1a1a2e',borderRadius:8,padding:'10px 12px'}}>
-            <div style={{fontSize:10,color:'rgba(255,255,255,0.6)',marginBottom:2}}>Total Year 2 visibility</div>
-            <div style={{fontSize:18,fontWeight:700,color:'#fff'}}>{fmtCurrency(d.yr2TotalWeighted)}</div>
-            <div style={{fontSize:10,color:'rgba(255,255,255,0.4)'}}>of $3M · {fmtPct(d.yr2TotalWeighted/3000000)}</div>
+      {/* BLOCK 1: Year 2 forecast */}
+      <div style={{ background:'#fff', border:`0.5px solid ${C.border}`, borderRadius:12, padding:'14px 18px', marginBottom:14 }}>
+        <div style={{ fontSize:11, fontWeight:600, color:C.textMuted, textTransform:'uppercase', letterSpacing:'.05em', marginBottom:10 }}>Year 2 forecast</div>
+
+        <div style={{ display:'flex', alignItems:'baseline', gap:12, marginBottom:10 }}>
+          <div style={{ fontSize:30, fontWeight:600, color:C.text }}>{fmtCurrency(d.forecastBase)}</div>
+          <div style={{ fontSize:12, color:C.textSub }}>
+            base forecast · <span style={{ color: onPace ? C.green : C.red, fontWeight:600 }}>{fmtPct(d.pctOfTarget)} of $3M target</span>
+            <InfoTooltip>
+              <div style={{ marginBottom:6 }}><strong>How scenarios are defined:</strong></div>
+              <div style={{ marginBottom:4 }}><strong style={{color:'#F1EFE8'}}>Base:</strong> Year 1 monthly quote volume × cohort-specific dollar-weighted close rates, across remaining Year 2 quote-generating days (accounts for 86-day non-INET sales cycle)</div>
+              <div style={{ marginBottom:4 }}><strong style={{color:'#F1EFE8'}}>Bear:</strong> 2nd-worst month of Year 1 used as steady-state input</div>
+              <div style={{ marginBottom:4 }}><strong style={{color:'#F1EFE8'}}>Bull:</strong> Trailing 90-day quote pace projected forward, only when it exceeds Year 1 average. Otherwise equals base.</div>
+              <div style={{ marginTop:6, fontStyle:'italic', opacity:0.85 }}>All scenarios exclude XL ($50K+) quotes and ad-hoc T&amp;M orders.</div>
+            </InfoTooltip>
           </div>
         </div>
-        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-          <span style={{fontSize:11,color:C.textMuted}}>Year 1 run rate:</span>
-          <span style={{fontSize:11,fontWeight:600,color:C.text}}>$1.87M/yr</span>
-          <span style={{fontSize:11,color:C.textMuted,margin:'0 4px'}}>·</span>
-          <span style={{fontSize:11,color:C.textMuted}}>Year 2 target:</span>
-          <span style={{fontSize:11,fontWeight:600,color:C.text}}>$3.0M</span>
-          <span style={{fontSize:11,color:C.textMuted,margin:'0 4px'}}>·</span>
-          <span style={{fontSize:11,color:C.textMuted}}>Gap to target:</span>
-          <span style={{fontSize:11,fontWeight:600,color:C.red}}>{fmtCurrency(3000000-d.yr2TotalWeighted)}</span>
-          <span style={{fontSize:11,color:C.textMuted,margin:'0 4px'}}>·</span>
-          <MetricCard label="" value="" style={{display:'none'}}/>
-          <span style={{fontSize:11,color:C.green,fontWeight:600}}>Active sources: {d.activePMs} PMs across {d.activeDealers} dealers ↑</span>
+
+        <div style={{ fontSize:12, color:C.textSub, marginBottom:14 }}>
+          Range: <span style={{ color:C.text, fontWeight:600 }}>{fmtCurrency(d.forecastBear)} bear</span> — {fmtCurrency(d.forecastBase)} base — <span style={{ color:C.text, fontWeight:600 }}>{fmtCurrency(d.forecastBull)} bull</span> · excludes XL upside
+        </div>
+
+        <div style={{ marginBottom:6 }}>
+          <div style={{ fontSize:11, color:C.textMuted, marginBottom:6 }}>Composition</div>
+          <div style={{ display:'flex', height:28, borderRadius:4, overflow:'hidden', border:`0.5px solid ${C.border}` }}>
+            <div title={`Collected ${fmtCurrency(d.yr2Rev)}`} style={{ background:'#3B6D11', width:`${pct(d.yr2Rev)}%`, minWidth: d.yr2Rev > 0 ? 4 : 0 }} />
+            <div title={`AR ${fmtCurrency(d.arWeighted)}`} style={{ background:'#639922', width:`${pct(d.arWeighted)}%`, minWidth: d.arWeighted > 0 ? 4 : 0 }} />
+            <div title={`Jobs in flight ${fmtCurrency(d.flightWeighted)}`} style={{ background:'#97C459', width:`${pct(d.flightWeighted)}%`, display:'flex', alignItems:'center', padding:'0 6px', color:'#173404', fontSize:11, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden' }}>{fmtCurrency(d.flightWeighted)} in flight</div>
+            <div title={`Pipeline ${fmtCurrency(d.pipelineWeighted)}`} style={{ background:'#C0DD97', width:`${pct(d.pipelineWeighted)}%`, display:'flex', alignItems:'center', padding:'0 6px', color:'#173404', fontSize:11, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden' }}>{fmtCurrency(d.pipelineWeighted)} pipeline</div>
+            <div title={`Future quotes ${fmtCurrency(d.futureBase)}`} style={{ background:'#EAF3DE', width:`${pct(d.futureBase)}%`, display:'flex', alignItems:'center', padding:'0 6px', color:'#173404', fontSize:11, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden' }}>{fmtCurrency(d.futureBase)} future quotes</div>
+          </div>
+          <div style={{ display:'flex', justifyContent:'space-between', marginTop:6, fontSize:10, color:C.textMuted }}>
+            <span>Collected {fmtCurrency(d.yr2Rev)} · AR {fmtCurrency(d.arWeighted)}</span>
+            <span>← committed · need to generate →</span>
+          </div>
+        </div>
+
+        <div style={{ background: onPace ? C.greenBg : C.redBg, borderRadius:8, padding:'9px 13px', marginTop:12, fontSize:12, color: onPace ? C.greenTxt : C.redTxt }}>
+          <span style={{ fontWeight:600 }}>{paceText}</span> {paceDetail}
         </div>
       </div>
 
-      <SectionLabel>Revenue engines — projected annual at current pace</SectionLabel>
-      <Card style={{ marginBottom:14 }}>
-        <p style={{ fontSize:11, color:C.textMuted, marginBottom:10 }}>Historical monthly averages annualized. Baseline if next 12 months mirror Year 1.</p>
-        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 10px', borderRadius:8, border:`0.5px solid ${C.border}`, marginBottom:6, background:'#f5f6f8' }}>
-          <div style={{ width:180, flexShrink:0 }}>
-            <div style={{ fontSize:12, fontWeight:600, color:C.text }}>Total at current pace</div>
-            <div style={{ fontSize:11, color:C.textSub }}>All engines combined</div>
+      {/* BLOCK 2: XL bounty */}
+      {d.xlBounty.length > 0 && (
+        <div style={{ background:'#fff', border:`0.5px solid ${C.border}`, borderRadius:12, padding:'14px 18px', marginBottom:14 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:10 }}>
+            <div style={{ fontSize:11, fontWeight:600, color:C.textMuted, textTransform:'uppercase', letterSpacing:'.05em' }}>XL bounty · open $50K+ quotes</div>
+            <div style={{ fontSize:12, color:C.textMuted }}>
+              {d.xlBounty.length} open · {fmtCurrency(d.xlBountyFace)} face · not in forecast · Year 1 win rate 7%
+            </div>
           </div>
-          <div style={{ flex:1, height:6, background:'#e8eaed', borderRadius:3, overflow:'hidden', maxWidth:100 }}>
-            <div style={{ width:'62%', height:'100%', background:C.green, borderRadius:3 }} />
+          <div style={{ borderTop:`0.5px solid ${C.border}` }}>
+            {d.xlBounty.map(x => (
+              <div key={x.order_number} style={{ display:'grid', gridTemplateColumns:'60px 1.5fr 1.2fr 90px', gap:8, padding:'8px 0', borderBottom:`0.5px solid ${C.border}`, fontSize:12, alignItems:'center' }}>
+                <span style={{ color:C.textMuted }}>#{x.order_number}</span>
+                <span style={{ color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{x.order_name || '—'}</span>
+                <span style={{ color:C.textSub, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{x.customer} / {x.pm}</span>
+                <span style={{ color:C.text, fontWeight:600, textAlign:'right' }}>{fmtCurrency(x.gt)}</span>
+              </div>
+            ))}
           </div>
-          <div style={{ fontSize:13, fontWeight:600, color:C.text, width:80, textAlign:'right', flexShrink:0 }}>$1.87M/yr</div>
         </div>
-        {ENGINES.map((e,i) => (
-          <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 10px', borderRadius:8, border:`0.5px ${e.dashed?'dashed':'solid'} ${C.border}`, marginBottom:6, opacity:e.dashed?0.7:1 }}>
-            <div style={{ width:180, flexShrink:0 }}>
-              <div style={{ fontSize:12, fontWeight:600, color:C.text }}>{e.label}</div>
-              <div style={{ fontSize:11, color:C.textSub }}>{e.sub}</div>
+      )}
+
+      {/* BLOCK 3: Momentum */}
+      <div style={{ background:'#fff', border:`0.5px solid ${C.border}`, borderRadius:12, padding:'14px 18px', marginBottom:14 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:10 }}>
+          <div style={{ fontSize:11, fontWeight:600, color:C.textMuted, textTransform:'uppercase', letterSpacing:'.05em' }}>Quote momentum · last 30 days</div>
+          <div style={{ fontSize:11, color:C.textMuted }}>
+            all channels · formal quotes only
+            <InfoTooltip>Includes non-INET formal quotes (went through Labor Quote Presented stage) AND all INET requests from PYR200. Excludes ad-hoc T&amp;M orders that skip the formal quoting stage.</InfoTooltip>
+          </div>
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4, minmax(0, 1fr))', gap:10, marginBottom:12 }}>
+          <MomentumCard
+            label="Total quotes"
+            sub="(value)"
+            value={`${d.totalQuotes30}`}
+            valueSub={fmtCurrency(d.totalQuotesDollars30)}
+            delta={d.totalQuotesDelta}
+            baselineLabel={`${d.y1MonthlyTotalQuotes}/mo avg`}
+          />
+          <MomentumCard
+            label="Non-INET formal only"
+            value={`${d.nonInetFormalQuotes30}`}
+            delta={d.nonInetQuotesDelta}
+            baselineLabel={`${d.y1MonthlyNonInetFormal}/mo avg`}
+          />
+          <MomentumCard
+            label="New PMs this month"
+            value={`${d.newPMs30}`}
+            valueColor={d.newPMs30 > 0 ? C.green : C.red}
+            footerText={d.newPMs30 > 0 ? 'first-ever quote' : 'none in 30 days'}
+            footerColor={d.newPMs30 > 0 ? C.textMuted : C.red}
+          />
+          <MomentumCard
+            label="New dealers"
+            value={`${d.newDealers60}`}
+            valueColor={d.newDealers60 > 0 ? C.green : C.red}
+            footerText={d.newDealers60 > 0 ? 'last 60 days' : 'none in 60 days'}
+            footerColor={d.newDealers60 > 0 ? C.textMuted : C.red}
+          />
+        </div>
+
+        <MomentumBanner
+          totalDelta={d.totalQuotesDelta}
+          nonInetDelta={d.nonInetQuotesDelta}
+          newPMs={d.newPMs30}
+          newDealers={d.newDealers60}
+        />
+      </div>
+
+      {/* BLOCK 4: This week's attention */}
+      {d.attentionList.length > 0 && (
+        <div style={{ background:'#fff', border:`0.5px solid ${C.border}`, borderRadius:12, padding:'14px 18px', marginBottom:14 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:12 }}>
+            <div style={{ fontSize:11, fontWeight:600, color:C.textMuted, textTransform:'uppercase', letterSpacing:'.05em' }}>This week's attention</div>
+            <div style={{ fontSize:11, color:C.textMuted }}>resolves when IQ / INET data updates</div>
+          </div>
+          <div>
+            {d.attentionList.map((item, i) => (
+              <div key={item.key} style={{ display:'grid', gridTemplateColumns:'32px 1fr auto', gap:10, padding:'10px 0', borderBottom: i < d.attentionList.length - 1 ? `0.5px solid ${C.border}` : 'none', alignItems:'center' }}>
+                <span style={{
+                  background: item.severity === 'red' ? C.redBg : C.amberBg,
+                  color: item.severity === 'red' ? C.redTxt : C.amberTxt,
+                  fontSize:11, fontWeight:600, padding:'3px 0', borderRadius:10, textAlign:'center'
+                }}>{item.count}</span>
+                <span style={{ fontSize:13, color:C.text }}>
+                  <span style={{ fontWeight:600 }}>{item.label}</span>
+                  <span style={{ color:C.textSub }}> — {item.detail}</span>
+                </span>
+                <span style={{ fontSize:12, color:C.textSub, fontWeight:600 }}>
+                  {item.amount !== null && item.amount !== undefined ? fmtCurrency(item.amount) : item.amountLabel}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* BLOCK 5: Customer concentration */}
+      <div style={{ background:'#fff', border:`0.5px solid ${C.border}`, borderRadius:12, padding:'14px 18px', marginBottom:14 }}>
+        <div style={{ fontSize:11, fontWeight:600, color:C.textMuted, textTransform:'uppercase', letterSpacing:'.05em', marginBottom:10 }}>Customer concentration · health indicator</div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'1.4fr 1fr 1fr 70px', gap:12, paddingBottom:6, borderBottom:`0.5px solid ${C.border}`, fontSize:10, fontWeight:600, color:C.textMuted, textTransform:'uppercase' }}>
+          <div>Customer</div>
+          <div>Year 1</div>
+          <div>Year 2 so far</div>
+          <div style={{ textAlign:'center' }}>Trend</div>
+        </div>
+        {d.concentration.map((c, i) => (
+          <div key={c.customer} style={{ display:'grid', gridTemplateColumns:'1.4fr 1fr 1fr 70px', gap:12, padding:'7px 0', borderBottom: i < d.concentration.length - 1 ? `0.5px solid ${C.border}` : 'none', fontSize:12, alignItems:'center' }}>
+            <div style={{ color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{c.customer}</div>
+            <div style={{ color:C.text }}>
+              {fmtCurrency(c.y1Rev)} <span style={{ color: c.y1Pct > 0.35 ? C.red : C.textSub }}>({fmtPct(c.y1Pct)})</span>
             </div>
-            <div style={{ flex:1, height:6, background:'#e8eaed', borderRadius:3, overflow:'hidden', maxWidth:100 }}>
-              <div style={{ width:`${e.pct}%`, height:'100%', background:e.color, borderRadius:3 }} />
+            <div style={{ color:C.text }}>
+              {fmtCurrency(c.y2Rev)} <span style={{ color:C.textSub }}>({fmtPct(c.y2Pct)})</span>
             </div>
-            <div style={{ fontSize:13, fontWeight:600, color:C.text, width:80, textAlign:'right', flexShrink:0 }}>{e.val}</div>
+            <div style={{ textAlign:'center', fontSize:14 }}>
+              {c.trend === 'tm-ends' && <span style={{ color:C.textMuted, fontSize:11 }}>T&amp;M ends</span>}
+              {c.trend === 'up' && <span style={{ color:C.amber }}>↑</span>}
+              {c.trend === 'down' && <span style={{ color:C.green }}>↓</span>}
+              {c.trend === 'neutral' && <span style={{ color:C.textSub }}>—</span>}
+            </div>
           </div>
         ))}
-      </Card>
 
-      <SectionLabel>Forward visibility — two funnels</SectionLabel>
-      <Grid cols={2} gap={10} style={{ marginBottom:0 }}>
-        <Card>
-          <CardTitle>Pipeline — open quotes</CardTitle>
-          <div style={{ fontSize:11, color:C.textSub, marginBottom:5 }}>All open quotes — gross face value, no adjustment</div>
-          <div style={{ width:'100%', height:32, background:'#e8eaed', borderRadius:4, overflow:'hidden', marginBottom:4 }}>
-            <div style={{ width:'100%', height:'100%', background:'#B5D4F4', display:'flex', alignItems:'center', paddingLeft:10 }}>
-              <span style={{ fontSize:12, fontWeight:600, color:'#0C447C', whiteSpace:'nowrap' }}>{fmtCurrency(d.pipelineFace)} face value (incl. INET)</span>
-            </div>
-          </div>
-          <div style={{ textAlign:'center', fontSize:11, color:C.textMuted, margin:'3px 0' }}>▼ weighted by PM / dealer / cohort close rates — 39% effective</div>
-          <div style={{ fontSize:11, color:C.textSub, marginBottom:5 }}>Expected revenue from current pipeline</div>
-          <div style={{ width:'100%', height:36, background:'#e8eaed', borderRadius:4, overflow:'hidden' }}>
-            <div style={{ width:'39%', height:'100%', background:C.green, display:'flex', alignItems:'center', paddingLeft:10 }}>
-              <span style={{ fontSize:13, fontWeight:600, color:'#fff', whiteSpace:'nowrap' }}>{fmtCurrency(d.pipelineWeighted)} weighted</span>
-            </div>
-          </div>
-          <Insight>Non-INET {fmtCurrency(d.nonInetPipelineFace)} → {fmtCurrency(d.nonInetPipelineWeighted)} · INET open quotes {fmtCurrency(d.inetPipelineFace)} → {fmtCurrency(d.inetPipelineWeighted)} (77.8% SP rate). See Pipeline page for drill-down.</Insight>
-        </Card>
-
-        <Card>
-          <CardTitle>Jobs in flight — won, awaiting invoicing</CardTitle>
-          <div style={{ fontSize:11, color:C.textSub, marginBottom:5 }}>All won jobs — gross face value, no adjustment</div>
-          <div style={{ width:'100%', height:32, background:'#e8eaed', borderRadius:4, overflow:'hidden', marginBottom:4 }}>
-            <div style={{ width:'100%', height:'100%', background:'#C0DD97', display:'flex', alignItems:'center', paddingLeft:10 }}>
-              <span style={{ fontSize:12, fontWeight:600, color:'#27500A', whiteSpace:'nowrap' }}>{fmtCurrency(d.totalFlightFace)} face value</span>
-            </div>
-          </div>
-          <div style={{ textAlign:'center', fontSize:11, color:C.textMuted, margin:'3px 0' }}>▼ confidence-weighted by status and age — 83% retained</div>
-          <div style={{ fontSize:11, color:C.textSub, marginBottom:5 }}>Expected revenue from jobs in flight</div>
-          <div style={{ width:'100%', height:36, background:'#e8eaed', borderRadius:4, overflow:'hidden', marginBottom:8 }}>
-            <div style={{ width:'83%', height:'100%', background:C.green, display:'flex', alignItems:'center', paddingLeft:10 }}>
-              <span style={{ fontSize:13, fontWeight:600, color:'#fff', whiteSpace:'nowrap' }}>{fmtCurrency(d.totalFlightWeighted)} weighted</span>
-            </div>
-          </div>
-          <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
-            <Badge type="green">Ready to invoice {fmtCurrency(d.rtiValue)} · 90%</Badge>
-            <Badge type="blue">In-progress + Approved {fmtCurrency(d.backlogFace)} · 83%</Badge>
-            <Badge type="gray">Skyline ~$40K</Badge>
-          </div>
-          <Insight>Ready to invoice = work done, 90% confidence. Approved/In-progress discounted by status age. See Jobs in flight page.</Insight>
-        </Card>
-      </Grid>
-
-
-
-      <SectionLabel>Customer concentration — revenue share · pipeline share · trend</SectionLabel>
-      <Card style={{ marginBottom:14 }}>
-        <Insight style={{ marginBottom:10, marginTop:0 }}>Healthy direction: INSTALL Net % declining while absolute revenue grows. Target below 35% by end of Year 2.</Insight>
-        <div style={{ display:'grid', gridTemplateColumns:'155px 70px 55px 70px 55px 70px 55px 50px', fontSize:11, fontWeight:600, color:C.textMuted, padding:'0 0 6px', borderBottom:`0.5px solid ${C.border}`, gap:6, marginBottom:4 }}>
-          <span>Customer</span><span>Yr1 revenue</span><span>Yr1 %</span><span>Yr2 revenue</span><span>Yr2 %</span><span>Pipeline $</span><span>Pipeline %</span><span>Trend</span>
+        <div style={{ fontSize:11, color:C.textMuted, marginTop:12 }}>
+          No customer dominates. Year 1: {d.newPMsY1} new PMs (3+ quotes) and {d.newDealersY1} new dealers brought into the book. The right direction.
         </div>
-        {d.concentration.map((c,i) => {
-          const y1Over = c.y1Pct > 0.2;
-          const improving = c.y2Pct < c.y1Pct - 0.02;
-          const worsening = c.y2Pct > c.y1Pct + 0.02;
-          return (
-            <div key={i} style={{ display:'grid', gridTemplateColumns:'155px 70px 55px 70px 55px 70px 55px 50px', fontSize:11, padding:'5px 0', borderBottom:`0.5px solid ${C.border}`, gap:6, alignItems:'center' }}>
-              <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', color:C.text }}>{c.customer}</span>
-              <span style={{ color:C.text }}>{fmtCurrency(c.y1Rev)}</span>
-              <span><Badge type={y1Over?'red':'gray'}>{fmtPct(c.y1Pct)}</Badge></span>
-              <span style={{ color:C.textSub }}>{c.y2Rev>0?fmtCurrency(c.y2Rev):'$0'}</span>
-              <span style={{ color:C.textSub }}>{c.y2Pct>0?fmtPct(c.y2Pct):'$0'}</span>
-              <span style={{ color:C.textSub }}>{fmtCurrency(c.pipeVal)}</span>
-              <span style={{ color:C.textSub }}>{fmtPct(c.pipePct)}</span>
-              <span style={{ fontWeight:700, fontSize:14, color:improving?C.green:worsening?C.red:C.textMuted }}>{improving?'↓✓':worsening?'↑⚠':'—'}</span>
-            </div>
-          );
-        })}
-        <div style={{ fontSize:10, color:C.textMuted, marginTop:6 }}>↓✓ = concentration decreasing (good) · ↑⚠ = concentration increasing · Pipeline includes INET open quotes from PYR200</div>
-      </Card>
+      </div>
+    </div>
+  );
+}
 
-      <SectionLabel>Year 1 monthly revenue — reference baseline</SectionLabel>
-      <Card>
-        <div style={{ height:150 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={d.monthly} margin={{ top:5, right:10, bottom:5, left:10 }}>
-              <XAxis dataKey="label" tick={{ fontSize:10, fill:C.textMuted }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize:10, fill:C.textMuted }} axisLine={false} tickLine={false} tickFormatter={v=>`$${Math.round(v/1000)}K`} />
-              <Tooltip formatter={v=>[fmtCurrency(v,false),'Revenue']} contentStyle={{ fontSize:12, borderRadius:8 }} />
-              <Bar dataKey="revenue" radius={[3,3,0,0]}>
-                {d.monthly.map((_,i)=><Cell key={i} fill={C.blue}/>)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-        <Insight>Year 1: {fmtCurrency(d.yr1Rev)}. Spikes from large INET jobs. Non-INET base avg ~$90K/mo. Mar low = year-end invoices not yet collected.</Insight>
-      </Card>
+function MomentumCard({ label, sub, value, valueSub, valueColor, delta, baselineLabel, footerText, footerColor }) {
+  let deltaText = null, deltaColor = null;
+  if (delta !== undefined && delta !== null) {
+    const pct = Math.round(delta * 100);
+    if (pct > 0) { deltaText = `↑ ${pct}% vs ${baselineLabel}`; deltaColor = C.green; }
+    else if (pct < 0) {
+      deltaText = `↓ ${Math.abs(pct)}% vs ${baselineLabel}`;
+      deltaColor = pct < -20 ? C.red : C.amber;
+    } else {
+      deltaText = `flat vs ${baselineLabel}`; deltaColor = C.textMuted;
+    }
+  }
+
+  return (
+    <div style={{ background:'#f0f2f5', borderRadius:8, padding:'10px 12px' }}>
+      <div style={{ fontSize:11, color:C.textSub }}>
+        {label} {sub && <span style={{ color:C.textMuted }}>{sub}</span>}
+      </div>
+      <div style={{ fontSize:20, fontWeight:600, color: valueColor || C.text, marginTop:2 }}>
+        {value} {valueSub && <span style={{ fontSize:13, color:C.textSub, fontWeight:400 }}>({valueSub})</span>}
+      </div>
+      {deltaText && <div style={{ fontSize:11, color: deltaColor, marginTop:2 }}>{deltaText}</div>}
+      {footerText && <div style={{ fontSize:11, color: footerColor || C.textMuted, marginTop:2 }}>{footerText}</div>}
+    </div>
+  );
+}
+
+function MomentumBanner({ totalDelta, newPMs, newDealers }) {
+  const quotesHealthy = totalDelta >= -0.1;
+  const concerns = [];
+  if (newDealers === 0) concerns.push('no new dealers in 60 days');
+  if (newPMs === 0) concerns.push('no new PMs in 30 days');
+  if (totalDelta < -0.2) concerns.push('quote volume is well below Year 1 average');
+
+  if (quotesHealthy && concerns.length === 0) {
+    return (
+      <div style={{ background:C.greenBg, borderRadius:8, padding:'10px 13px', fontSize:12, color:C.greenTxt, borderLeft:`3px solid ${C.green}` }}>
+        <span style={{ fontWeight:600 }}>Strong quote flow.</span> Volume above Year 1 averages and new sources coming in. Keep pushing.
+      </div>
+    );
+  }
+
+  if (quotesHealthy && concerns.length > 0) {
+    return (
+      <div style={{ background:C.greenBg, borderRadius:8, padding:'10px 13px', fontSize:12, color:C.greenTxt, borderLeft:`3px solid ${C.green}` }}>
+        <span style={{ fontWeight:600 }}>Strong quote flow.</span> Volume above average. One gap: {concerns.join('; ')} — keep looking for new sources.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background:C.amberBg, borderRadius:8, padding:'10px 13px', fontSize:12, color:C.amberTxt, borderLeft:`3px solid ${C.amber}` }}>
+      <span style={{ fontWeight:600 }}>Early warning:</span> {concerns.join('; ')}. If this pattern holds, Year 2 forecast drops. Drive more quotes this week.
     </div>
   );
 }
