@@ -311,16 +311,35 @@ function enrichInstallnet(rawInet) {
 // ── MAIN DATA HOOK ───────────────────────────────────────────
 // All enrichment happens here once when data loads
 function enrichUnpaid(rawUnpaid) {
+  const today = new Date();
+  today.setHours(0,0,0,0);
   return (rawUnpaid || [])
     .filter(r => !parseBool(r.ignore))
-    .map(r => ({
-      ...r,
-      gt: parseNum(r.grand_total),
-      agingDays: parseNum(r.aging_days),
-      agingDaysDue: parseNum(r.aging_days_due),
-      isOverdue: parseNum(r.aging_days_due) < 0,
-      isPartial: r.payment_status === 'Partial',
-    }));
+    .map(r => {
+      // Overdue = due_date is in the past
+      let isOverdue = false;
+      let daysPastDue = null;
+      if (r.due_date) {
+        const due = new Date(r.due_date);
+        if (!isNaN(due)) {
+          due.setHours(0,0,0,0);
+          const diffDays = Math.floor((today - due) / 86400000);
+          if (diffDays > 0) {
+            isOverdue = true;
+            daysPastDue = diffDays;
+          }
+        }
+      }
+      return {
+        ...r,
+        gt: parseNum(r.grand_total),
+        agingDays: parseNum(r.aging_days),
+        agingDaysDue: parseNum(r.aging_days_due),
+        isOverdue,
+        daysPastDue,
+        isPartial: r.payment_status === 'Partial',
+      };
+    });
 }
 
 export function useEnrichedData(rawData) {
@@ -507,21 +526,27 @@ export function useOverviewData(data) {
 
     // ── MOMENTUM (last 30 days) ──────────────────────────────
     const cutoff30 = new Date(TODAY - 30 * 86400000);
-    // All formal quotes (non-INET formal + INET)
+
+    // Non-INET formal quotes, last 30 days
     const nonInetFormal30 = orders.filter(r =>
       !r.isInet && r.isFormalQuote && new Date(r.created_date) >= cutoff30
     );
-    const inet30 = installnet.filter(r => r.date_requested && new Date(r.date_requested) >= cutoff30);
-    const totalQuotes30 = nonInetFormal30.length + inet30.length;
-    const totalQuotesDollars30 = nonInetFormal30.reduce((s,r) => s+r.gt, 0) +
-                                 inet30.reduce((s,r) => s+r.price, 0);
+    const nonInetDollars30 = nonInetFormal30.reduce((s,r) => s+r.gt, 0);
 
-    // Build unified list for drill-down
+    // INET quotes, last 30 days
+    const inet30 = installnet.filter(r => r.date_requested && new Date(r.date_requested) >= cutoff30);
+    const inetDollars30 = inet30.reduce((s,r) => s+r.price, 0);
+
+    // Total
+    const totalQuotes30 = nonInetFormal30.length + inet30.length;
+    const totalQuotesDollars30 = nonInetDollars30 + inetDollars30;
+
+    // Build unified list for drill-down (ordered by most recent)
     const allQuotes30 = [
       ...nonInetFormal30.map(r => ({
         type: 'Non-INET',
         number: r.order_number,
-        name: r.order_name,
+        order_name: r.order_name,
         customer: r.customer,
         pm: r.pm,
         value: r.gt,
@@ -531,7 +556,7 @@ export function useOverviewData(data) {
       ...inet30.map(r => ({
         type: 'INET',
         number: r.project_id,
-        name: r.project_name,
+        order_name: r.project_name,
         customer: 'INSTALL Net',
         pm: r.pm,
         value: r.price,
@@ -540,16 +565,30 @@ export function useOverviewData(data) {
       })),
     ].sort((a,b) => new Date(b.date) - new Date(a.date));
 
-    // Year 1 monthly averages for comparison
+    // Year 1 monthly baselines (non-INET formal)
     const y1NonInetFormalCount = y1NonInetFormal.length;
-    const y1InetCount = installnet.filter(r => r.yearBucket === 'Year 1').length;
-    const y1MonthlyTotalQuotes = (y1NonInetFormalCount + y1InetCount) / 12;
+    const y1NonInetFormalDollars = y1NonInetFormal.reduce((s,r) => s+r.gt, 0);
     const y1MonthlyNonInetFormal = y1NonInetFormalCount / 12;
+    const y1MonthlyNonInetDollars = y1NonInetFormalDollars / 12;
 
-    const totalQuotesDelta = y1MonthlyTotalQuotes > 0
-      ? (totalQuotes30 - y1MonthlyTotalQuotes) / y1MonthlyTotalQuotes : 0;
-    const nonInetQuotesDelta = y1MonthlyNonInetFormal > 0
-      ? (nonInetFormal30.length - y1MonthlyNonInetFormal) / y1MonthlyNonInetFormal : 0;
+    // Year 1 monthly baselines (INET) — count and dollars
+    const y1Inet = installnet.filter(r => r.yearBucket === 'Year 1');
+    const y1InetCount = y1Inet.length;
+    const y1InetQuoteDollars = y1Inet.reduce((s,r) => s+r.price, 0);
+    const y1MonthlyInetCount = y1InetCount / 12;
+    const y1MonthlyInetDollars = y1InetQuoteDollars / 12;
+
+    // Year 1 totals
+    const y1MonthlyTotalQuotes = (y1NonInetFormalCount + y1InetCount) / 12;
+    const y1MonthlyTotalDollars = (y1NonInetFormalDollars + y1InetQuoteDollars) / 12;
+
+    // Deltas: count and dollar for each channel
+    const deltaPct = (current, baseline) => baseline > 0 ? (current - baseline) / baseline : 0;
+    const nonInetCountDelta  = deltaPct(nonInetFormal30.length, y1MonthlyNonInetFormal);
+    const nonInetDollarDelta = deltaPct(nonInetDollars30,       y1MonthlyNonInetDollars);
+    const inetCountDelta     = deltaPct(inet30.length,          y1MonthlyInetCount);
+    const inetDollarDelta    = deltaPct(inetDollars30,          y1MonthlyInetDollars);
+    const totalQuotesDelta   = deltaPct(totalQuotes30,          y1MonthlyTotalQuotes);
 
     // New PMs in last 30 days (first-ever quote anywhere in our data)
     const pmFirstSeen = {};
@@ -791,19 +830,33 @@ export function useOverviewData(data) {
       xlBounty,
       xlBountyFace: xlBounty.reduce((s,r) => s+r.gt, 0),
 
-      // Momentum
+      // Momentum — Non-INET
+      nonInetQuotes30: nonInetFormal30.length,
+      nonInetDollars30: Math.round(nonInetDollars30),
+      nonInetCountDelta,
+      nonInetDollarDelta,
+      nonInetItems30: allQuotes30.filter(q => q.type === 'Non-INET'),
+      y1MonthlyNonInetCount: Math.round(y1MonthlyNonInetFormal),
+      y1MonthlyNonInetDollars: Math.round(y1MonthlyNonInetDollars),
+
+      // Momentum — INET
+      inetQuotes30: inet30.length,
+      inetDollars30: Math.round(inetDollars30),
+      inetCountDelta,
+      inetDollarDelta,
+      inetItems30: allQuotes30.filter(q => q.type === 'INET'),
+      y1MonthlyInetCount: Math.round(y1MonthlyInetCount),
+      y1MonthlyInetDollars: Math.round(y1MonthlyInetDollars),
+
+      // Momentum — Total (for banner logic)
       totalQuotes30, totalQuotesDollars30: Math.round(totalQuotesDollars30),
       totalQuotesDelta,
       totalQuotes30Items: allQuotes30,
-      nonInetFormalQuotes30: nonInetFormal30.length,
-      nonInetFormalQuotes30Items: allQuotes30.filter(q => q.type === 'Non-INET'),
-      nonInetQuotesDelta,
+      y1MonthlyTotalQuotes: Math.round(y1MonthlyTotalQuotes),
       newPMs30: newPMs30.length,
       newPMs30Items: newPMs30,
       newDealers60: newDealers60.length,
       newDealers60Items: newDealers60,
-      y1MonthlyTotalQuotes: Math.round(y1MonthlyTotalQuotes),
-      y1MonthlyNonInetFormal: Math.round(y1MonthlyNonInetFormal),
 
       // Attention
       attentionList,

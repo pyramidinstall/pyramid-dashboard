@@ -5,8 +5,8 @@ import { fmtCurrency, fmtPct } from '../utils/sheets';
 
 export default function Overview({ data }) {
   const d = useOverviewData(data);
-  const [drill, setDrill] = useState(null); // { title, type, items } or null
-  const [orderDetail, setOrderDetail] = useState(null); // for XL bounty detail
+  const [drill, setDrill] = useState(null);
+  const [orderDetail, setOrderDetail] = useState(null);
 
   if (!d) return null;
 
@@ -17,11 +17,9 @@ export default function Overview({ data }) {
     ? `Committed work (${fmtCurrency(d.committed)}) covers ${coverageText} months of target. We have work to do to keep it there — see momentum below.`
     : `Base forecast is ${fmtPct(d.pctOfTarget)} of $3M target. Committed work covers ${coverageText} months. Gap must come from future quotes.`;
 
-  // Composition percentages
   const totalComp = d.yr2Rev + d.arWeighted + d.flightWeighted + d.pipelineWeighted + d.futureBase;
   const pct = (v) => totalComp > 0 ? (v / totalComp) * 100 : 0;
 
-  // Original order lookup for XL bounty click
   const openXLOrders = data.orders.filter(r => r.isOpen && !r.isInet && r.gt >= 50000);
 
   return (
@@ -62,7 +60,7 @@ export default function Overview({ data }) {
         <div style={{ marginBottom:6 }}>
           <div style={{ fontSize:11, color:C.textMuted, marginBottom:6 }}>Composition <span style={{ color:C.textMuted }}>· click a segment to drill down</span></div>
           <div style={{ display:'flex', height:28, borderRadius:4, overflow:'hidden', border:`0.5px solid ${C.border}` }}>
-            <ForecastSegment color="#3B6D11" width={pct(d.yr2Rev)} label="Collected" value={d.yr2Rev} showLabel={false}
+            <ForecastSegment color="#3B6D11" width={pct(d.yr2Rev)} label="collected" value={d.yr2Rev} showLabel={false}
               onClick={() => setDrill({ title:'Collected — Year 2 paid invoices', type:'invoices-paid',
                 items: data.invoices.filter(r => r.yearBucket === 'Year 2') })} />
             <ForecastSegment color="#639922" width={pct(d.arWeighted)} label="AR" value={d.arWeighted} showLabel={false}
@@ -74,7 +72,7 @@ export default function Overview({ data }) {
             <ForecastSegment color="#C0DD97" width={pct(d.pipelineWeighted)} label="pipeline" value={d.pipelineWeighted} showLabel={true}
               onClick={() => setDrill({ title:'Open pipeline — weighted', type:'pipeline',
                 items: data.orders.filter(r => r.isOpen && !r.isInet && r.cohort !== 'XL $50K+') })} />
-            <ForecastSegment color="#EAF3DE" width={pct(d.futureBase)} label="future quotes" value={d.futureBase} showLabel={true} lightText />
+            <ForecastSegment color="#EAF3DE" width={pct(d.futureBase)} label="future quotes" value={d.futureBase} showLabel={true} />
           </div>
           <div style={{ display:'flex', justifyContent:'space-between', marginTop:6, fontSize:10, color:C.textMuted }}>
             <span>Collected {fmtCurrency(d.yr2Rev)} · AR {fmtCurrency(d.arWeighted)}</span>
@@ -116,44 +114,48 @@ export default function Overview({ data }) {
         </div>
       )}
 
-      {/* BLOCK 3: Momentum */}
+      {/* BLOCK 3: Momentum — separate non-INET and INET */}
       <div style={{ background:'#fff', border:`0.5px solid ${C.border}`, borderRadius:12, padding:'14px 18px', marginBottom:14 }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:10 }}>
           <div style={{ fontSize:11, fontWeight:600, color:C.textMuted, textTransform:'uppercase', letterSpacing:'.05em' }}>Quote momentum · last 30 days</div>
           <div style={{ fontSize:11, color:C.textMuted }}>
-            all channels · formal quotes only
-            <InfoTooltip>Includes non-INET formal quotes (went through Labor Quote Presented stage) AND all INET requests from PYR200. Excludes ad-hoc T&amp;M orders that skip the formal quoting stage.</InfoTooltip>
+            formal quotes only
+            <InfoTooltip>A "formal quote" means an order that went through the Labor Quote Presented stage in IQ. Excludes ad-hoc T&amp;M orders that are created to execute work already in motion (like Hudson's recurring moving work). Those are captured elsewhere as in-flight work.</InfoTooltip>
           </div>
         </div>
 
         <div style={{ display:'grid', gridTemplateColumns:'repeat(4, minmax(0, 1fr))', gap:10, marginBottom:12 }}>
           <MomentumCard
-            label="Total quotes"
-            sub="(value)"
-            value={`${d.totalQuotes30}`}
-            valueSub={fmtCurrency(d.totalQuotesDollars30)}
-            delta={d.totalQuotesDelta}
-            baselineLabel={`${d.y1MonthlyTotalQuotes}/mo avg`}
-            onClick={() => setDrill({ title:`Last 30 days · ${d.totalQuotes30} quotes`, type:'quotes', items: d.totalQuotes30Items })}
+            label="Non-INET quotes"
+            count={d.nonInetQuotes30}
+            dollars={d.nonInetDollars30}
+            countDelta={d.nonInetCountDelta}
+            dollarDelta={d.nonInetDollarDelta}
+            baselineCount={d.y1MonthlyNonInetCount}
+            baselineDollars={d.y1MonthlyNonInetDollars}
+            onClick={() => setDrill({ title:`Non-INET quotes · last 30 days (${d.nonInetQuotes30})`, type:'quotes', items: d.nonInetItems30 })}
           />
           <MomentumCard
-            label="Non-INET formal only"
-            value={`${d.nonInetFormalQuotes30}`}
-            delta={d.nonInetQuotesDelta}
-            baselineLabel={`${d.y1MonthlyNonInetFormal}/mo avg`}
-            onClick={() => setDrill({ title:`Non-INET formal · ${d.nonInetFormalQuotes30} quotes`, type:'quotes', items: d.nonInetFormalQuotes30Items })}
+            label="INET quotes"
+            count={d.inetQuotes30}
+            dollars={d.inetDollars30}
+            countDelta={d.inetCountDelta}
+            dollarDelta={d.inetDollarDelta}
+            baselineCount={d.y1MonthlyInetCount}
+            baselineDollars={d.y1MonthlyInetDollars}
+            onClick={() => setDrill({ title:`INET quotes · last 30 days (${d.inetQuotes30})`, type:'quotes', items: d.inetItems30 })}
           />
-          <MomentumCard
+          <SimpleMetricCard
             label="New PMs this month"
-            value={`${d.newPMs30}`}
+            value={d.newPMs30}
             valueColor={d.newPMs30 > 0 ? C.green : C.red}
             footerText={d.newPMs30 > 0 ? 'first-ever quote' : 'none in 30 days'}
             footerColor={d.newPMs30 > 0 ? C.textMuted : C.red}
             onClick={d.newPMs30 > 0 ? () => setDrill({ title:'New PMs (last 30 days)', type:'newPMs', items: d.newPMs30Items }) : null}
           />
-          <MomentumCard
+          <SimpleMetricCard
             label="New dealers"
-            value={`${d.newDealers60}`}
+            value={d.newDealers60}
             valueColor={d.newDealers60 > 0 ? C.green : C.red}
             footerText={d.newDealers60 > 0 ? 'last 60 days' : 'none in 60 days'}
             footerColor={d.newDealers60 > 0 ? C.textMuted : C.red}
@@ -162,7 +164,10 @@ export default function Overview({ data }) {
         </div>
 
         <MomentumBanner
-          totalDelta={d.totalQuotesDelta}
+          nonInetCountDelta={d.nonInetCountDelta}
+          nonInetDollarDelta={d.nonInetDollarDelta}
+          inetCountDelta={d.inetCountDelta}
+          inetDollarDelta={d.inetDollarDelta}
           newPMs={d.newPMs30}
           newDealers={d.newDealers60}
         />
@@ -211,12 +216,11 @@ export default function Overview({ data }) {
           <div style={{ textAlign:'center' }}>Trend</div>
         </div>
         {d.concentration.map((c, i) => {
-          const customerInvoices = [
-            ...data.invoices.filter(inv => inv.customer === c.customer || inv.customer.startsWith(c.customer.replace('…',''))),
-          ];
+          const customerInvoices = data.invoices.filter(inv =>
+            inv.customer === c.customer || inv.customer.startsWith(c.customer.replace('…','')));
           return (
             <div key={c.customer}
-              onClick={() => setDrill({ title:`${c.customer} — revenue history`, type:'customer-invoices', items: customerInvoices, customerName: c.customer })}
+              onClick={() => setDrill({ title:`${c.customer} — revenue history`, type:'customer-invoices', items: customerInvoices })}
               style={{ display:'grid', gridTemplateColumns:'1.4fr 1fr 1fr 70px', gap:12, padding:'7px 0', borderBottom: i < d.concentration.length - 1 ? `0.5px solid ${C.border}` : 'none', fontSize:12, alignItems:'center', cursor:'pointer', transition:'background 0.1s' }}
               onMouseEnter={e => e.currentTarget.style.background = '#f5f8fc'}
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
@@ -242,14 +246,12 @@ export default function Overview({ data }) {
         </div>
       </div>
 
-      {/* DRILL DOWN MODAL */}
       {drill && (
         <Modal wide title={drill.title} onClose={() => setDrill(null)}>
           <DrillTable drill={drill} onOrderClick={setOrderDetail} />
         </Modal>
       )}
 
-      {/* ORDER DETAIL MODAL */}
       {orderDetail && (
         <Modal title={`Order #${orderDetail.order_number}`} onClose={() => setOrderDetail(null)}>
           <DetailRow label="Order name" value={orderDetail.order_name || '—'} />
@@ -283,36 +285,37 @@ export default function Overview({ data }) {
 
 // ── LOCAL COMPONENTS ──
 
-function ForecastSegment({ color, width, label, value, showLabel, lightText, onClick }) {
-  const textColor = lightText ? '#173404' : '#173404';
+function ForecastSegment({ color, width, label, value, showLabel, onClick }) {
+  // Use fmtCurrency so values >= $1M display as $1.6M not $1627K
   return (
     <div
       onClick={onClick}
-      title={`${label} ${value ? '$' + Math.round(value/1000) + 'K' : ''}`}
+      title={`${label} ${value ? fmtCurrency(value) : ''}`}
       style={{
         background: color,
         width: `${width}%`,
         minWidth: value > 0 ? 4 : 0,
         display: 'flex', alignItems: 'center', padding: showLabel ? '0 6px' : 0,
-        color: textColor, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden',
+        color: '#173404', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden',
         cursor: onClick ? 'pointer' : 'default',
       }}>
-      {showLabel && width > 10 && value > 0 && `$${Math.round(value / 1000)}K ${label}`}
+      {showLabel && width > 10 && value > 0 && `${fmtCurrency(value)} ${label}`}
     </div>
   );
 }
 
-function MomentumCard({ label, sub, value, valueSub, valueColor, delta, baselineLabel, footerText, footerColor, onClick }) {
-  let deltaText = null, deltaColor = null;
-  if (delta !== undefined && delta !== null) {
-    const pct = Math.round(delta * 100);
-    if (pct > 0) { deltaText = `↑ ${pct}% vs ${baselineLabel}`; deltaColor = C.green; }
-    else if (pct < 0) {
-      deltaText = `↓ ${Math.abs(pct)}% vs ${baselineLabel}`;
-      deltaColor = pct < -20 ? C.red : C.amber;
-    } else {
-      deltaText = `flat vs ${baselineLabel}`; deltaColor = C.textMuted;
-    }
+function MomentumCard({ label, count, dollars, countDelta, dollarDelta, baselineCount, baselineDollars, onClick }) {
+  const cPct = Math.round((countDelta || 0) * 100);
+  const dPct = Math.round((dollarDelta || 0) * 100);
+  const arrow = (pct) => pct > 2 ? '↑' : pct < -2 ? '↓' : '→';
+  const colorFor = (pct) => pct > 2 ? C.green : pct < -20 ? C.red : pct < -2 ? C.amber : C.textMuted;
+
+  // Show count delta as primary. Add divergent context only when count and dollar trends diverge materially.
+  const divergent = Math.abs(cPct - dPct) > 20;
+  let divergentNote = null;
+  if (divergent) {
+    if (cPct > dPct) divergentNote = 'smaller-ticket mix';
+    else             divergentNote = 'bigger-ticket mix';
   }
 
   return (
@@ -321,44 +324,72 @@ function MomentumCard({ label, sub, value, valueSub, valueColor, delta, baseline
       style={{ background:'#f0f2f5', borderRadius:8, padding:'10px 12px', cursor: onClick ? 'pointer' : 'default', transition:'background 0.1s' }}
       onMouseEnter={e => onClick && (e.currentTarget.style.background = '#e6edf5')}
       onMouseLeave={e => onClick && (e.currentTarget.style.background = '#f0f2f5')}>
-      <div style={{ fontSize:11, color:C.textSub }}>
-        {label} {sub && <span style={{ color:C.textMuted }}>{sub}</span>}
+      <div style={{ fontSize:11, color:C.textSub }}>{label}</div>
+      <div style={{ fontSize:20, fontWeight:600, color:C.text, marginTop:2 }}>
+        {count} <span style={{ fontSize:13, color:C.textSub, fontWeight:400 }}>({fmtCurrency(dollars)})</span>
       </div>
-      <div style={{ fontSize:20, fontWeight:600, color: valueColor || C.text, marginTop:2 }}>
-        {value} {valueSub && <span style={{ fontSize:13, color:C.textSub, fontWeight:400 }}>({valueSub})</span>}
+      <div style={{ fontSize:11, color: colorFor(cPct), marginTop:2 }}>
+        {arrow(cPct)} {Math.abs(cPct)}% vs {baselineCount}/mo avg
       </div>
-      {deltaText && <div style={{ fontSize:11, color: deltaColor, marginTop:2 }}>{deltaText}</div>}
+      {divergent && (
+        <div style={{ fontSize:10, color:C.textMuted, marginTop:1 }}>
+          {divergentNote} · $ {arrow(dPct)} {Math.abs(dPct)}% vs {fmtCurrency(baselineDollars)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SimpleMetricCard({ label, value, valueColor, footerText, footerColor, onClick }) {
+  return (
+    <div
+      onClick={onClick}
+      style={{ background:'#f0f2f5', borderRadius:8, padding:'10px 12px', cursor: onClick ? 'pointer' : 'default', transition:'background 0.1s' }}
+      onMouseEnter={e => onClick && (e.currentTarget.style.background = '#e6edf5')}
+      onMouseLeave={e => onClick && (e.currentTarget.style.background = '#f0f2f5')}>
+      <div style={{ fontSize:11, color:C.textSub }}>{label}</div>
+      <div style={{ fontSize:20, fontWeight:600, color: valueColor || C.text, marginTop:2 }}>{value}</div>
       {footerText && <div style={{ fontSize:11, color: footerColor || C.textMuted, marginTop:2 }}>{footerText}</div>}
     </div>
   );
 }
 
-function MomentumBanner({ totalDelta, newPMs, newDealers }) {
-  const quotesHealthy = totalDelta >= -0.1;
+function MomentumBanner({ nonInetCountDelta, nonInetDollarDelta, inetCountDelta, inetDollarDelta, newPMs, newDealers }) {
+  const nonInetHealthy = nonInetCountDelta >= -0.1;
+  const inetHealthy    = inetCountDelta    >= -0.1;
+  const bothHealthy    = nonInetHealthy && inetHealthy;
   const concerns = [];
+
+  if (!nonInetHealthy && inetHealthy)
+    concerns.push(`non-INET count ${Math.round(nonInetCountDelta*100)}% vs Year 1 average`);
+  if (nonInetHealthy && !inetHealthy)
+    concerns.push(`INET count ${Math.round(inetCountDelta*100)}% vs Year 1 average`);
+  if (!nonInetHealthy && !inetHealthy)
+    concerns.push('both channels below Year 1 pace');
   if (newDealers === 0) concerns.push('no new dealers in 60 days');
   if (newPMs === 0) concerns.push('no new PMs in 30 days');
-  if (totalDelta < -0.2) concerns.push('quote volume is well below Year 1 average');
 
-  if (quotesHealthy && concerns.length === 0) {
+  if (bothHealthy && concerns.length === 0) {
     return (
       <div style={{ background:C.greenBg, borderRadius:8, padding:'10px 13px', fontSize:12, color:C.greenTxt, borderLeft:`3px solid ${C.green}` }}>
-        <span style={{ fontWeight:600 }}>Strong quote flow.</span> Volume above Year 1 averages and new sources coming in. Keep pushing.
+        <span style={{ fontWeight:600 }}>Strong quote flow.</span> Both channels above Year 1 averages and diversity looks healthy. Keep pushing.
       </div>
     );
   }
 
-  if (quotesHealthy && concerns.length > 0) {
+  if (bothHealthy) {
     return (
       <div style={{ background:C.greenBg, borderRadius:8, padding:'10px 13px', fontSize:12, color:C.greenTxt, borderLeft:`3px solid ${C.green}` }}>
-        <span style={{ fontWeight:600 }}>Strong quote flow.</span> Volume above average. One gap: {concerns.join('; ')} — keep looking for new sources.
+        <span style={{ fontWeight:600 }}>Strong quote flow.</span> Both channels healthy. One gap: {concerns.join('; ')}.
       </div>
     );
   }
 
+  // mixed or both down
+  const bothDown = !nonInetHealthy && !inetHealthy;
   return (
-    <div style={{ background:C.amberBg, borderRadius:8, padding:'10px 13px', fontSize:12, color:C.amberTxt, borderLeft:`3px solid ${C.amber}` }}>
-      <span style={{ fontWeight:600 }}>Early warning:</span> {concerns.join('; ')}. If this pattern holds, Year 2 forecast drops. Drive more quotes this week.
+    <div style={{ background: bothDown ? C.redBg : C.amberBg, borderRadius:8, padding:'10px 13px', fontSize:12, color: bothDown ? C.redTxt : C.amberTxt, borderLeft:`3px solid ${bothDown ? C.red : C.amber}` }}>
+      <span style={{ fontWeight:600 }}>{bothDown ? 'Early warning:' : 'Mixed signals:'}</span> {concerns.join('; ')}. Drive more quotes this week.
     </div>
   );
 }
@@ -366,40 +397,41 @@ function MomentumBanner({ totalDelta, newPMs, newDealers }) {
 function DrillTable({ drill, onOrderClick }) {
   const { type, items } = drill;
 
-  // Define columns based on type
   const cols = (() => {
     switch (type) {
-      case 'quote': // expiring14
+      case 'quote':
         return [
-          { key:'order_number', label:'#', width:'10%' },
-          { key:'customer', label:'Customer', width:'22%' },
-          { key:'pm', label:'PM', width:'18%' },
-          { key:'gt', label:'Value', width:'13%', render:v => fmtCurrency(v) },
-          { key:'daysToExpiry', label:'Days left', width:'12%',
+          { key:'order_number', label:'#', width:'8%' },
+          { key:'order_name', label:'Order name', width:'24%', render:v => v || '—' },
+          { key:'customer', label:'Customer', width:'18%' },
+          { key:'pm', label:'PM', width:'14%' },
+          { key:'gt', label:'Value', width:'11%', render:v => fmtCurrency(v) },
+          { key:'daysToExpiry', label:'Days left', width:'10%',
             render:v => <Badge type={v<=14?'red':'amber'}>{v}d</Badge> },
           { key:'expiry_date', label:'Expires', width:'15%' },
         ];
-      case 'order': // RTI or approved aging
+      case 'order':
         return [
-          { key:'order_number', label:'#', width:'10%' },
-          { key:'customer', label:'Customer', width:'22%' },
-          { key:'pm', label:'PM', width:'18%' },
-          { key:'status', label:'Status', width:'18%' },
-          { key:'gt', label:'Face', width:'12%', render:v => fmtCurrency(v) },
-          { key:'daysInStatus', label:'Days', width:'10%',
+          { key:'order_number', label:'#', width:'8%' },
+          { key:'order_name', label:'Order name', width:'22%', render:v => v || '—' },
+          { key:'customer', label:'Customer', width:'17%' },
+          { key:'pm', label:'PM', width:'14%' },
+          { key:'status', label:'Status', width:'15%' },
+          { key:'gt', label:'Face', width:'11%', render:v => fmtCurrency(v) },
+          { key:'daysInStatus', label:'Days', width:'13%',
             render:v => <Badge type={v>90?'red':v>30?'amber':'gray'}>{v}d</Badge> },
         ];
-      case 'invoice': // overdue invoices
+      case 'invoice':
         return [
-          { key:'invoice_ref', label:'Invoice #', width:'11%' },
-          { key:'customer', label:'Customer', width:'24%' },
-          { key:'invoice_name', label:'Invoice name', width:'28%' },
-          { key:'gt', label:'Amount', width:'13%', render:v => fmtCurrency(v) },
+          { key:'invoice_ref', label:'Invoice #', width:'10%' },
+          { key:'customer', label:'Customer', width:'22%' },
+          { key:'invoice_name', label:'Invoice name', width:'30%', render:v => v || '—' },
+          { key:'gt', label:'Amount', width:'12%', render:v => fmtCurrency(v) },
           { key:'due_date', label:'Due', width:'12%' },
-          { key:'agingDaysDue', label:'Past due', width:'12%',
-            render:v => <Badge type={Math.abs(v)>60?'red':'amber'}>{Math.abs(v)}d</Badge> },
+          { key:'daysPastDue', label:'Past due', width:'14%',
+            render:v => v ? <Badge type={v>60?'red':'amber'}>{v}d</Badge> : '—' },
         ];
-      case 'pm': // cold PMs
+      case 'pm':
         return [
           { key:'pm', label:'PM', width:'35%' },
           { key:'lastQuoteDate', label:'Last quote', width:'18%' },
@@ -407,7 +439,7 @@ function DrillTable({ drill, onOrderClick }) {
             render:v => <Badge type={v>60?'red':'amber'}>{v}d</Badge> },
           { key:'y1Count', label:'Y1 quotes', width:'14%' },
         ];
-      case 'dealer': // cold dealers
+      case 'dealer':
         return [
           { key:'customer', label:'Dealer', width:'40%' },
           { key:'lastQuoteDate', label:'Last quote', width:'20%' },
@@ -415,22 +447,23 @@ function DrillTable({ drill, onOrderClick }) {
             render:v => <Badge type={v>120?'red':'amber'}>{v}d</Badge> },
           { key:'y1Count', label:'Y1 quotes', width:'14%' },
         ];
-      case 'quotes': // momentum drill-down
+      case 'quotes':
         return [
           { key:'type', label:'Type', width:'10%',
             render:v => <Badge type={v==='INET'?'purple':'blue'}>{v}</Badge> },
-          { key:'number', label:'#', width:'11%' },
-          { key:'customer', label:'Customer', width:'20%' },
-          { key:'name', label:'Name', width:'24%' },
-          { key:'pm', label:'PM', width:'16%' },
-          { key:'value', label:'Face', width:'12%', render:v => fmtCurrency(v) },
+          { key:'number', label:'#', width:'10%' },
+          { key:'order_name', label:'Order name', width:'24%', render:v => v || '—' },
+          { key:'customer', label:'Customer', width:'18%' },
+          { key:'pm', label:'PM', width:'14%' },
+          { key:'value', label:'Face', width:'11%', render:v => fmtCurrency(v) },
+          { key:'date', label:'Date', width:'11%' },
         ];
       case 'newPMs':
         return [
-          { key:'pm', label:'PM', width:'35%' },
+          { key:'pm', label:'PM', width:'32%' },
           { key:'dealer', label:'Dealer', width:'30%' },
-          { key:'firstDate', label:'First quote', width:'17%' },
-          { key:'quoteCount', label:'Quotes', width:'14%' },
+          { key:'firstDate', label:'First quote', width:'19%' },
+          { key:'quoteCount', label:'Quotes', width:'13%' },
         ];
       case 'newDealers':
         return [
@@ -440,47 +473,49 @@ function DrillTable({ drill, onOrderClick }) {
         ];
       case 'invoices-paid':
         return [
-          { key:'invoice_ref', label:'Invoice #', width:'11%' },
-          { key:'customer', label:'Customer', width:'28%' },
-          { key:'invoice_name', label:'Name', width:'33%' },
+          { key:'invoice_ref', label:'Invoice #', width:'10%' },
+          { key:'customer', label:'Customer', width:'22%' },
+          { key:'invoice_name', label:'Name', width:'34%', render:v => v || '—' },
           { key:'payment_date', label:'Paid date', width:'14%' },
           { key:'gt', label:'Amount', width:'12%', render:v => fmtCurrency(v) },
         ];
       case 'invoices-unpaid':
         return [
-          { key:'invoice_ref', label:'Invoice #', width:'11%' },
-          { key:'customer', label:'Customer', width:'24%' },
-          { key:'invoice_name', label:'Name', width:'27%' },
-          { key:'gt', label:'Amount', width:'13%', render:v => fmtCurrency(v) },
-          { key:'due_date', label:'Due', width:'13%' },
+          { key:'invoice_ref', label:'Invoice #', width:'10%' },
+          { key:'customer', label:'Customer', width:'22%' },
+          { key:'invoice_name', label:'Name', width:'26%', render:v => v || '—' },
+          { key:'gt', label:'Amount', width:'12%', render:v => fmtCurrency(v) },
+          { key:'due_date', label:'Due', width:'12%' },
           { key:'payment_status', label:'Status', width:'10%',
             render:v => <Badge type={v==='Partial'?'amber':'gray'}>{v}</Badge> },
         ];
       case 'backlog':
         return [
-          { key:'order_number', label:'#', width:'10%' },
-          { key:'customer', label:'Customer', width:'22%' },
-          { key:'pm', label:'PM', width:'18%' },
-          { key:'status', label:'Status', width:'18%' },
-          { key:'remaining', label:'Remaining', width:'14%', render:(v,r) => fmtCurrency(v || r.gt) },
-          { key:'backlogTier', label:'Tier', width:'16%',
+          { key:'order_number', label:'#', width:'8%' },
+          { key:'order_name', label:'Order name', width:'22%', render:v => v || '—' },
+          { key:'customer', label:'Customer', width:'17%' },
+          { key:'pm', label:'PM', width:'14%' },
+          { key:'status', label:'Status', width:'15%' },
+          { key:'remaining', label:'Remaining', width:'11%', render:(v,r) => fmtCurrency(v || r.gt) },
+          { key:'backlogTier', label:'Tier', width:'13%',
             render:v => v ? <Badge type={v==='On track'?'green':v==='Ready to invoice'?'green':v==='Slight delay'?'amber':'red'}>{v}</Badge> : '—' },
         ];
       case 'pipeline':
         return [
-          { key:'order_number', label:'#', width:'10%' },
-          { key:'customer', label:'Customer', width:'22%' },
-          { key:'pm', label:'PM', width:'18%' },
-          { key:'cohort', label:'Cohort', width:'14%' },
-          { key:'gt', label:'Face', width:'12%', render:v => fmtCurrency(v) },
-          { key:'pipelineWeighted', label:'Weighted', width:'12%', render:v => fmtCurrency(v || 0) },
-          { key:'daysToExpiry', label:'Exp', width:'10%',
+          { key:'order_number', label:'#', width:'8%' },
+          { key:'order_name', label:'Order name', width:'22%', render:v => v || '—' },
+          { key:'customer', label:'Customer', width:'17%' },
+          { key:'pm', label:'PM', width:'14%' },
+          { key:'cohort', label:'Cohort', width:'11%' },
+          { key:'gt', label:'Face', width:'10%', render:v => fmtCurrency(v) },
+          { key:'pipelineWeighted', label:'Wtd', width:'10%', render:v => fmtCurrency(v || 0) },
+          { key:'daysToExpiry', label:'Exp', width:'8%',
             render:v => v === null || v === undefined ? '—' : v < 0 ? <Badge type="gray">exp</Badge> : `${v}d` },
         ];
       case 'customer-invoices':
         return [
           { key:'invoice_ref', label:'Invoice #', width:'12%' },
-          { key:'invoice_name', label:'Name', width:'38%' },
+          { key:'invoice_name', label:'Name', width:'38%', render:v => v || '—' },
           { key:'payment_date', label:'Paid', width:'15%' },
           { key:'yearBucket', label:'Year', width:'13%' },
           { key:'gt', label:'Amount', width:'15%', render:v => fmtCurrency(v) },
