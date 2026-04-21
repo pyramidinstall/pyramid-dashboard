@@ -516,6 +516,30 @@ export function useOverviewData(data) {
     const totalQuotesDollars30 = nonInetFormal30.reduce((s,r) => s+r.gt, 0) +
                                  inet30.reduce((s,r) => s+r.price, 0);
 
+    // Build unified list for drill-down
+    const allQuotes30 = [
+      ...nonInetFormal30.map(r => ({
+        type: 'Non-INET',
+        number: r.order_number,
+        name: r.order_name,
+        customer: r.customer,
+        pm: r.pm,
+        value: r.gt,
+        date: r.created_date,
+        status: r.status,
+      })),
+      ...inet30.map(r => ({
+        type: 'INET',
+        number: r.project_id,
+        name: r.project_name,
+        customer: 'INSTALL Net',
+        pm: r.pm,
+        value: r.price,
+        date: r.date_requested,
+        status: r.sp_bid_status,
+      })),
+    ].sort((a,b) => new Date(b.date) - new Date(a.date));
+
     // Year 1 monthly averages for comparison
     const y1NonInetFormalCount = y1NonInetFormal.length;
     const y1InetCount = installnet.filter(r => r.yearBucket === 'Year 1').length;
@@ -537,7 +561,12 @@ export function useOverviewData(data) {
     });
     const newPMs30 = Object.entries(pmFirstSeen)
       .filter(([, d]) => d >= cutoff30)
-      .map(([pm]) => pm);
+      .map(([pm, firstDate]) => {
+        const rows = orders.filter(r => r.pm === pm);
+        const dealer = rows[0]?.customer || '';
+        return { pm, firstDate: firstDate.toISOString().slice(0,10), dealer, quoteCount: rows.length };
+      })
+      .sort((a,b) => b.quoteCount - a.quoteCount);
 
     // New dealers in last 60 days
     const cutoff60 = new Date(TODAY - 60 * 86400000);
@@ -550,7 +579,11 @@ export function useOverviewData(data) {
     });
     const newDealers60 = Object.entries(dealerFirstSeen)
       .filter(([, d]) => d >= cutoff60)
-      .map(([c]) => c);
+      .map(([customer, firstDate]) => {
+        const rows = orders.filter(r => r.customer === customer);
+        return { customer, firstDate: firstDate.toISOString().slice(0,10), quoteCount: rows.length };
+      })
+      .sort((a,b) => b.quoteCount - a.quoteCount);
 
     // ── ATTENTION LIST (data-resolved) ────────────────────────
     // L+ quotes expiring within 14 days
@@ -605,40 +638,85 @@ export function useOverviewData(data) {
       return y1Count >= 3;
     }).map(([c]) => c);
 
+    // Cold dealers — enrich with last seen date
+    const coldDealerDetails = coldDealers.map(c => {
+      const last = dealerLastSeen[c];
+      const y1Count = orders.filter(r => r.customer === c && r.yearBucket === 'Year 1').length;
+      return {
+        customer: c,
+        lastQuoteDate: last ? last.toISOString().slice(0,10) : '—',
+        daysSilent: last ? Math.floor((TODAY - last) / 86400000) : null,
+        y1Count,
+      };
+    }).sort((a,b) => (b.daysSilent||0) - (a.daysSilent||0));
+
+    // Cold PMs — enrich with last seen
+    const coldPMDetails = coldPMs.map(pm => {
+      const last = pmLastSeen[pm];
+      const y1Count = orders.filter(r => r.pm === pm && r.yearBucket === 'Year 1').length;
+      return {
+        pm,
+        lastQuoteDate: last ? last.toISOString().slice(0,10) : '—',
+        daysSilent: last ? Math.floor((TODAY - last) / 86400000) : null,
+        y1Count,
+      };
+    }).sort((a,b) => (b.daysSilent||0) - (a.daysSilent||0));
+
+    // Smart detail text — handle single-item specially
+    const smartDetail = (items, getName, fallback) => {
+      if (items.length === 0) return fallback;
+      if (items.length === 1) return getName(items[0]);
+      const names = items.slice(0, 3).map(getName).filter(Boolean);
+      const more = items.length > 3 ? ` +${items.length - 3} more` : '';
+      return names.join(', ') + more;
+    };
+
     const attentionList = [
       { key:'expiring14', severity:'red', count:expiring14.length,
         label:'L+ quotes expiring within 14 days',
-        detail:expiring14Names || 'see Pipeline page',
-        amount:expiring14.reduce((s,r) => s+r.gt, 0),
+        detail: smartDetail(expiring14, r => r.customer, 'see Pipeline'),
+        amount: expiring14.reduce((s,r) => s+r.gt, 0),
+        items: expiring14,
+        itemType: 'quote',
         show: expiring14.length > 0 },
       { key:'rti7', severity:'red', count:rtiOver7.length,
         label:'Ready to invoice over 7 days old',
-        detail:'process and send invoices today',
-        amount:rtiOver7.reduce((s,r) => s + (r.remaining || r.gt), 0),
+        detail: smartDetail(rtiOver7, r => r.customer, 'process and send invoices'),
+        amount: rtiOver7.reduce((s,r) => s + (r.remaining || r.gt), 0),
+        items: rtiOver7,
+        itemType: 'order',
         show: rtiOver7.length > 0 },
       { key:'ar', severity:'red', count:arOverdue.length,
         label:'Invoices past due date',
-        detail:'collect payment',
-        amount:arOverdueValue,
+        detail: smartDetail(arOverdue, r => r.customer, 'collect payment'),
+        amount: arOverdueValue,
+        items: arOverdue,
+        itemType: 'invoice',
         show: arOverdue.length > 0 },
-      { key:'coldPM', severity:'amber', count:coldPMs.length,
+      { key:'coldPM', severity:'amber', count:coldPMDetails.length,
         label:'PMs silent 21+ days',
-        detail: coldPMs.slice(0,5).map(p => {
-          const parts = p.split(' ');
-          return parts[0].charAt(0) + parts[0].slice(1).toLowerCase();
-        }).join(', ') || 'see Relationships',
+        detail: smartDetail(coldPMDetails, r => {
+          const p = r.pm.split(' ');
+          return p[0].charAt(0).toUpperCase() + p[0].slice(1).toLowerCase();
+        }, 'see Relationships'),
         amount:null, amountLabel:'reach out',
-        show: coldPMs.length > 0 },
+        items: coldPMDetails,
+        itemType: 'pm',
+        show: coldPMDetails.length > 0 },
       { key:'aging90', severity:'amber', count:approvedAging90.length,
         label:'Approved orders aging 90+ days',
-        detail:'status check, confirm still active',
+        detail: smartDetail(approvedAging90, r => r.customer, 'status check'),
         amount:approvedAging90Value,
+        items: approvedAging90,
+        itemType: 'order',
         show: approvedAging90.length > 0 },
-      { key:'coldDealers', severity:'amber', count:coldDealers.length,
+      { key:'coldDealers', severity:'amber', count:coldDealerDetails.length,
         label:'Dealers going cold',
-        detail: coldDealers.slice(0,3).join(', ') || 'monitor',
+        detail: smartDetail(coldDealerDetails, r => r.customer, 'monitor'),
         amount:null, amountLabel:'priority',
-        show: coldDealers.length > 0 },
+        items: coldDealerDetails,
+        itemType: 'dealer',
+        show: coldDealerDetails.length > 0 },
     ].filter(x => x.show);
 
     // ── CONCENTRATION (simplified) ───────────────────────────
@@ -716,10 +794,14 @@ export function useOverviewData(data) {
       // Momentum
       totalQuotes30, totalQuotesDollars30: Math.round(totalQuotesDollars30),
       totalQuotesDelta,
+      totalQuotes30Items: allQuotes30,
       nonInetFormalQuotes30: nonInetFormal30.length,
+      nonInetFormalQuotes30Items: allQuotes30.filter(q => q.type === 'Non-INET'),
       nonInetQuotesDelta,
       newPMs30: newPMs30.length,
+      newPMs30Items: newPMs30,
       newDealers60: newDealers60.length,
+      newDealers60Items: newDealers60,
       y1MonthlyTotalQuotes: Math.round(y1MonthlyTotalQuotes),
       y1MonthlyNonInetFormal: Math.round(y1MonthlyNonInetFormal),
 

@@ -95,9 +95,10 @@ export function Table({cols,rows,onRowClick}){
     </table>
   </div>;
 }
-export function Modal({title,onClose,children}){
+export function Modal({title,onClose,children,wide}){
+  const maxWidth = wide ? 900 : 520;
   return <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000}}>
-    <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:12,padding:24,maxWidth:520,width:'90%',maxHeight:'80vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:12,padding:24,maxWidth,width:'90%',maxHeight:'80vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
       <div style={{display:'flex',justifyContent:'space-between',marginBottom:16}}>
         <h3 style={{fontSize:16,fontWeight:700,color:C.text}}>{title}</h3>
         <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textMuted}}>×</button>

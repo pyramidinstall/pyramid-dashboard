@@ -1,10 +1,13 @@
-import React from 'react';
-import { C, InfoTooltip } from '../components/UI';
+import React, { useState } from 'react';
+import { C, InfoTooltip, Modal, Table, Badge, DetailRow } from '../components/UI';
 import { useOverviewData } from '../utils/dataHooks';
 import { fmtCurrency, fmtPct } from '../utils/sheets';
 
 export default function Overview({ data }) {
   const d = useOverviewData(data);
+  const [drill, setDrill] = useState(null); // { title, type, items } or null
+  const [orderDetail, setOrderDetail] = useState(null); // for XL bounty detail
+
   if (!d) return null;
 
   const coverageText = d.coverageMonths.toFixed(1);
@@ -17,6 +20,9 @@ export default function Overview({ data }) {
   // Composition percentages
   const totalComp = d.yr2Rev + d.arWeighted + d.flightWeighted + d.pipelineWeighted + d.futureBase;
   const pct = (v) => totalComp > 0 ? (v / totalComp) * 100 : 0;
+
+  // Original order lookup for XL bounty click
+  const openXLOrders = data.orders.filter(r => r.isOpen && !r.isInet && r.gt >= 50000);
 
   return (
     <div style={{ padding:'20px 24px', maxWidth:1320, margin:'0 auto' }}>
@@ -54,13 +60,21 @@ export default function Overview({ data }) {
         </div>
 
         <div style={{ marginBottom:6 }}>
-          <div style={{ fontSize:11, color:C.textMuted, marginBottom:6 }}>Composition</div>
+          <div style={{ fontSize:11, color:C.textMuted, marginBottom:6 }}>Composition <span style={{ color:C.textMuted }}>· click a segment to drill down</span></div>
           <div style={{ display:'flex', height:28, borderRadius:4, overflow:'hidden', border:`0.5px solid ${C.border}` }}>
-            <div title={`Collected ${fmtCurrency(d.yr2Rev)}`} style={{ background:'#3B6D11', width:`${pct(d.yr2Rev)}%`, minWidth: d.yr2Rev > 0 ? 4 : 0 }} />
-            <div title={`AR ${fmtCurrency(d.arWeighted)}`} style={{ background:'#639922', width:`${pct(d.arWeighted)}%`, minWidth: d.arWeighted > 0 ? 4 : 0 }} />
-            <div title={`Jobs in flight ${fmtCurrency(d.flightWeighted)}`} style={{ background:'#97C459', width:`${pct(d.flightWeighted)}%`, display:'flex', alignItems:'center', padding:'0 6px', color:'#173404', fontSize:11, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden' }}>{fmtCurrency(d.flightWeighted)} in flight</div>
-            <div title={`Pipeline ${fmtCurrency(d.pipelineWeighted)}`} style={{ background:'#C0DD97', width:`${pct(d.pipelineWeighted)}%`, display:'flex', alignItems:'center', padding:'0 6px', color:'#173404', fontSize:11, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden' }}>{fmtCurrency(d.pipelineWeighted)} pipeline</div>
-            <div title={`Future quotes ${fmtCurrency(d.futureBase)}`} style={{ background:'#EAF3DE', width:`${pct(d.futureBase)}%`, display:'flex', alignItems:'center', padding:'0 6px', color:'#173404', fontSize:11, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden' }}>{fmtCurrency(d.futureBase)} future quotes</div>
+            <ForecastSegment color="#3B6D11" width={pct(d.yr2Rev)} label="Collected" value={d.yr2Rev} showLabel={false}
+              onClick={() => setDrill({ title:'Collected — Year 2 paid invoices', type:'invoices-paid',
+                items: data.invoices.filter(r => r.yearBucket === 'Year 2') })} />
+            <ForecastSegment color="#639922" width={pct(d.arWeighted)} label="AR" value={d.arWeighted} showLabel={false}
+              onClick={() => setDrill({ title:'AR — invoiced, unpaid', type:'invoices-unpaid',
+                items: data.unpaid })} />
+            <ForecastSegment color="#97C459" width={pct(d.flightWeighted)} label="in flight" value={d.flightWeighted} showLabel={true}
+              onClick={() => setDrill({ title:'Jobs in flight — won, awaiting invoicing', type:'backlog',
+                items: data.orders.filter(r => r.isBacklog) })} />
+            <ForecastSegment color="#C0DD97" width={pct(d.pipelineWeighted)} label="pipeline" value={d.pipelineWeighted} showLabel={true}
+              onClick={() => setDrill({ title:'Open pipeline — weighted', type:'pipeline',
+                items: data.orders.filter(r => r.isOpen && !r.isInet && r.cohort !== 'XL $50K+') })} />
+            <ForecastSegment color="#EAF3DE" width={pct(d.futureBase)} label="future quotes" value={d.futureBase} showLabel={true} lightText />
           </div>
           <div style={{ display:'flex', justifyContent:'space-between', marginTop:6, fontSize:10, color:C.textMuted }}>
             <span>Collected {fmtCurrency(d.yr2Rev)} · AR {fmtCurrency(d.arWeighted)}</span>
@@ -83,14 +97,21 @@ export default function Overview({ data }) {
             </div>
           </div>
           <div style={{ borderTop:`0.5px solid ${C.border}` }}>
-            {d.xlBounty.map(x => (
-              <div key={x.order_number} style={{ display:'grid', gridTemplateColumns:'60px 1.5fr 1.2fr 90px', gap:8, padding:'8px 0', borderBottom:`0.5px solid ${C.border}`, fontSize:12, alignItems:'center' }}>
-                <span style={{ color:C.textMuted }}>#{x.order_number}</span>
-                <span style={{ color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{x.order_name || '—'}</span>
-                <span style={{ color:C.textSub, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{x.customer} / {x.pm}</span>
-                <span style={{ color:C.text, fontWeight:600, textAlign:'right' }}>{fmtCurrency(x.gt)}</span>
-              </div>
-            ))}
+            {d.xlBounty.map(x => {
+              const fullOrder = openXLOrders.find(r => r.order_number === x.order_number);
+              return (
+                <div key={x.order_number}
+                  onClick={() => setOrderDetail(fullOrder)}
+                  style={{ display:'grid', gridTemplateColumns:'60px 1.5fr 1.2fr 90px', gap:8, padding:'8px 0', borderBottom:`0.5px solid ${C.border}`, fontSize:12, alignItems:'center', cursor:'pointer' }}
+                  onMouseEnter={e => e.currentTarget.style.background = '#f5f8fc'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  <span style={{ color:C.textMuted }}>#{x.order_number}</span>
+                  <span style={{ color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{x.order_name || '—'}</span>
+                  <span style={{ color:C.textSub, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{x.customer} / {x.pm}</span>
+                  <span style={{ color:C.text, fontWeight:600, textAlign:'right' }}>{fmtCurrency(x.gt)}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -113,12 +134,14 @@ export default function Overview({ data }) {
             valueSub={fmtCurrency(d.totalQuotesDollars30)}
             delta={d.totalQuotesDelta}
             baselineLabel={`${d.y1MonthlyTotalQuotes}/mo avg`}
+            onClick={() => setDrill({ title:`Last 30 days · ${d.totalQuotes30} quotes`, type:'quotes', items: d.totalQuotes30Items })}
           />
           <MomentumCard
             label="Non-INET formal only"
             value={`${d.nonInetFormalQuotes30}`}
             delta={d.nonInetQuotesDelta}
             baselineLabel={`${d.y1MonthlyNonInetFormal}/mo avg`}
+            onClick={() => setDrill({ title:`Non-INET formal · ${d.nonInetFormalQuotes30} quotes`, type:'quotes', items: d.nonInetFormalQuotes30Items })}
           />
           <MomentumCard
             label="New PMs this month"
@@ -126,6 +149,7 @@ export default function Overview({ data }) {
             valueColor={d.newPMs30 > 0 ? C.green : C.red}
             footerText={d.newPMs30 > 0 ? 'first-ever quote' : 'none in 30 days'}
             footerColor={d.newPMs30 > 0 ? C.textMuted : C.red}
+            onClick={d.newPMs30 > 0 ? () => setDrill({ title:'New PMs (last 30 days)', type:'newPMs', items: d.newPMs30Items }) : null}
           />
           <MomentumCard
             label="New dealers"
@@ -133,12 +157,12 @@ export default function Overview({ data }) {
             valueColor={d.newDealers60 > 0 ? C.green : C.red}
             footerText={d.newDealers60 > 0 ? 'last 60 days' : 'none in 60 days'}
             footerColor={d.newDealers60 > 0 ? C.textMuted : C.red}
+            onClick={d.newDealers60 > 0 ? () => setDrill({ title:'New dealers (last 60 days)', type:'newDealers', items: d.newDealers60Items }) : null}
           />
         </div>
 
         <MomentumBanner
           totalDelta={d.totalQuotesDelta}
-          nonInetDelta={d.nonInetQuotesDelta}
           newPMs={d.newPMs30}
           newDealers={d.newDealers60}
         />
@@ -149,21 +173,25 @@ export default function Overview({ data }) {
         <div style={{ background:'#fff', border:`0.5px solid ${C.border}`, borderRadius:12, padding:'14px 18px', marginBottom:14 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:12 }}>
             <div style={{ fontSize:11, fontWeight:600, color:C.textMuted, textTransform:'uppercase', letterSpacing:'.05em' }}>This week's attention</div>
-            <div style={{ fontSize:11, color:C.textMuted }}>resolves when IQ / INET data updates</div>
+            <div style={{ fontSize:11, color:C.textMuted }}>click a row for details · resolves when IQ / INET data updates</div>
           </div>
           <div>
             {d.attentionList.map((item, i) => (
-              <div key={item.key} style={{ display:'grid', gridTemplateColumns:'32px 1fr auto', gap:10, padding:'10px 0', borderBottom: i < d.attentionList.length - 1 ? `0.5px solid ${C.border}` : 'none', alignItems:'center' }}>
+              <div key={item.key}
+                onClick={() => setDrill({ title:`${item.label} (${item.count})`, type:item.itemType, items:item.items })}
+                style={{ display:'grid', gridTemplateColumns:'32px minmax(0,1fr) auto', gap:10, padding:'10px 0', borderBottom: i < d.attentionList.length - 1 ? `0.5px solid ${C.border}` : 'none', alignItems:'center', cursor:'pointer', transition:'background 0.1s' }}
+                onMouseEnter={e => e.currentTarget.style.background = '#f5f8fc'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                 <span style={{
                   background: item.severity === 'red' ? C.redBg : C.amberBg,
                   color: item.severity === 'red' ? C.redTxt : C.amberTxt,
                   fontSize:11, fontWeight:600, padding:'3px 0', borderRadius:10, textAlign:'center'
                 }}>{item.count}</span>
-                <span style={{ fontSize:13, color:C.text }}>
+                <span style={{ fontSize:13, color:C.text, minWidth:0, overflow:'hidden' }}>
                   <span style={{ fontWeight:600 }}>{item.label}</span>
                   <span style={{ color:C.textSub }}> — {item.detail}</span>
                 </span>
-                <span style={{ fontSize:12, color:C.textSub, fontWeight:600 }}>
+                <span style={{ fontSize:12, color:C.textSub, fontWeight:600, whiteSpace:'nowrap' }}>
                   {item.amount !== null && item.amount !== undefined ? fmtCurrency(item.amount) : item.amountLabel}
                 </span>
               </div>
@@ -182,33 +210,99 @@ export default function Overview({ data }) {
           <div>Year 2 so far</div>
           <div style={{ textAlign:'center' }}>Trend</div>
         </div>
-        {d.concentration.map((c, i) => (
-          <div key={c.customer} style={{ display:'grid', gridTemplateColumns:'1.4fr 1fr 1fr 70px', gap:12, padding:'7px 0', borderBottom: i < d.concentration.length - 1 ? `0.5px solid ${C.border}` : 'none', fontSize:12, alignItems:'center' }}>
-            <div style={{ color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{c.customer}</div>
-            <div style={{ color:C.text }}>
-              {fmtCurrency(c.y1Rev)} <span style={{ color: c.y1Pct > 0.35 ? C.red : C.textSub }}>({fmtPct(c.y1Pct)})</span>
+        {d.concentration.map((c, i) => {
+          const customerInvoices = [
+            ...data.invoices.filter(inv => inv.customer === c.customer || inv.customer.startsWith(c.customer.replace('…',''))),
+          ];
+          return (
+            <div key={c.customer}
+              onClick={() => setDrill({ title:`${c.customer} — revenue history`, type:'customer-invoices', items: customerInvoices, customerName: c.customer })}
+              style={{ display:'grid', gridTemplateColumns:'1.4fr 1fr 1fr 70px', gap:12, padding:'7px 0', borderBottom: i < d.concentration.length - 1 ? `0.5px solid ${C.border}` : 'none', fontSize:12, alignItems:'center', cursor:'pointer', transition:'background 0.1s' }}
+              onMouseEnter={e => e.currentTarget.style.background = '#f5f8fc'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+              <div style={{ color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{c.customer}</div>
+              <div style={{ color:C.text }}>
+                {fmtCurrency(c.y1Rev)} <span style={{ color: c.y1Pct > 0.35 ? C.red : C.textSub }}>({fmtPct(c.y1Pct)})</span>
+              </div>
+              <div style={{ color:C.text }}>
+                {fmtCurrency(c.y2Rev)} <span style={{ color:C.textSub }}>({fmtPct(c.y2Pct)})</span>
+              </div>
+              <div style={{ textAlign:'center', fontSize:14 }}>
+                {c.trend === 'tm-ends' && <span style={{ color:C.textMuted, fontSize:11 }}>T&amp;M ends</span>}
+                {c.trend === 'up' && <span style={{ color:C.amber }}>↑</span>}
+                {c.trend === 'down' && <span style={{ color:C.green }}>↓</span>}
+                {c.trend === 'neutral' && <span style={{ color:C.textSub }}>—</span>}
+              </div>
             </div>
-            <div style={{ color:C.text }}>
-              {fmtCurrency(c.y2Rev)} <span style={{ color:C.textSub }}>({fmtPct(c.y2Pct)})</span>
-            </div>
-            <div style={{ textAlign:'center', fontSize:14 }}>
-              {c.trend === 'tm-ends' && <span style={{ color:C.textMuted, fontSize:11 }}>T&amp;M ends</span>}
-              {c.trend === 'up' && <span style={{ color:C.amber }}>↑</span>}
-              {c.trend === 'down' && <span style={{ color:C.green }}>↓</span>}
-              {c.trend === 'neutral' && <span style={{ color:C.textSub }}>—</span>}
-            </div>
-          </div>
-        ))}
+          );
+        })}
 
         <div style={{ fontSize:11, color:C.textMuted, marginTop:12 }}>
           No customer dominates. Year 1: {d.newPMsY1} new PMs (3+ quotes) and {d.newDealersY1} new dealers brought into the book. The right direction.
         </div>
       </div>
+
+      {/* DRILL DOWN MODAL */}
+      {drill && (
+        <Modal wide title={drill.title} onClose={() => setDrill(null)}>
+          <DrillTable drill={drill} onOrderClick={setOrderDetail} />
+        </Modal>
+      )}
+
+      {/* ORDER DETAIL MODAL */}
+      {orderDetail && (
+        <Modal title={`Order #${orderDetail.order_number}`} onClose={() => setOrderDetail(null)}>
+          <DetailRow label="Order name" value={orderDetail.order_name || '—'} />
+          <DetailRow label="Customer" value={orderDetail.customer} />
+          <DetailRow label="PM" value={orderDetail.pm} />
+          <DetailRow label="Salesperson" value={orderDetail.salesperson} />
+          <DetailRow label="Status" value={orderDetail.status} />
+          <DetailRow label="Face value" value={fmtCurrency(orderDetail.gt)} />
+          <DetailRow label="Cohort" value={orderDetail.cohort} />
+          {orderDetail.pipelineCR !== null && orderDetail.pipelineCR !== undefined && (
+            <>
+              <DetailRow label="Win rate" value={`${Math.round(orderDetail.pipelineCR * 100)}%${orderDetail.pipelineCRSource ? ` (${orderDetail.pipelineCRSource})` : ''}`} />
+              <DetailRow label="Weighted value" value={fmtCurrency(orderDetail.pipelineWeighted || 0)} />
+            </>
+          )}
+          {orderDetail.lqp_start_date && <DetailRow label="Presented" value={orderDetail.lqp_start_date} />}
+          {orderDetail.daysPresented !== null && orderDetail.daysPresented !== undefined && <DetailRow label="Days presented" value={`${orderDetail.daysPresented} days`} />}
+          {orderDetail.expiry_date && <DetailRow label="Expires" value={orderDetail.expiry_date} />}
+          {orderDetail.daysToExpiry !== null && orderDetail.daysToExpiry !== undefined && <DetailRow label="Days to expiry" value={`${orderDetail.daysToExpiry} days`} />}
+          {orderDetail.modification_notes && (
+            <div style={{ marginTop:12, fontSize:12, color:C.textSub }}>
+              <div style={{ fontWeight:600, marginBottom:4 }}>Notes:</div>
+              <div style={{ whiteSpace:'pre-wrap' }}>{orderDetail.modification_notes}</div>
+            </div>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }
 
-function MomentumCard({ label, sub, value, valueSub, valueColor, delta, baselineLabel, footerText, footerColor }) {
+// ── LOCAL COMPONENTS ──
+
+function ForecastSegment({ color, width, label, value, showLabel, lightText, onClick }) {
+  const textColor = lightText ? '#173404' : '#173404';
+  return (
+    <div
+      onClick={onClick}
+      title={`${label} ${value ? '$' + Math.round(value/1000) + 'K' : ''}`}
+      style={{
+        background: color,
+        width: `${width}%`,
+        minWidth: value > 0 ? 4 : 0,
+        display: 'flex', alignItems: 'center', padding: showLabel ? '0 6px' : 0,
+        color: textColor, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden',
+        cursor: onClick ? 'pointer' : 'default',
+      }}>
+      {showLabel && width > 10 && value > 0 && `$${Math.round(value / 1000)}K ${label}`}
+    </div>
+  );
+}
+
+function MomentumCard({ label, sub, value, valueSub, valueColor, delta, baselineLabel, footerText, footerColor, onClick }) {
   let deltaText = null, deltaColor = null;
   if (delta !== undefined && delta !== null) {
     const pct = Math.round(delta * 100);
@@ -222,7 +316,11 @@ function MomentumCard({ label, sub, value, valueSub, valueColor, delta, baseline
   }
 
   return (
-    <div style={{ background:'#f0f2f5', borderRadius:8, padding:'10px 12px' }}>
+    <div
+      onClick={onClick}
+      style={{ background:'#f0f2f5', borderRadius:8, padding:'10px 12px', cursor: onClick ? 'pointer' : 'default', transition:'background 0.1s' }}
+      onMouseEnter={e => onClick && (e.currentTarget.style.background = '#e6edf5')}
+      onMouseLeave={e => onClick && (e.currentTarget.style.background = '#f0f2f5')}>
       <div style={{ fontSize:11, color:C.textSub }}>
         {label} {sub && <span style={{ color:C.textMuted }}>{sub}</span>}
       </div>
@@ -262,5 +360,145 @@ function MomentumBanner({ totalDelta, newPMs, newDealers }) {
     <div style={{ background:C.amberBg, borderRadius:8, padding:'10px 13px', fontSize:12, color:C.amberTxt, borderLeft:`3px solid ${C.amber}` }}>
       <span style={{ fontWeight:600 }}>Early warning:</span> {concerns.join('; ')}. If this pattern holds, Year 2 forecast drops. Drive more quotes this week.
     </div>
+  );
+}
+
+function DrillTable({ drill, onOrderClick }) {
+  const { type, items } = drill;
+
+  // Define columns based on type
+  const cols = (() => {
+    switch (type) {
+      case 'quote': // expiring14
+        return [
+          { key:'order_number', label:'#', width:'10%' },
+          { key:'customer', label:'Customer', width:'22%' },
+          { key:'pm', label:'PM', width:'18%' },
+          { key:'gt', label:'Value', width:'13%', render:v => fmtCurrency(v) },
+          { key:'daysToExpiry', label:'Days left', width:'12%',
+            render:v => <Badge type={v<=14?'red':'amber'}>{v}d</Badge> },
+          { key:'expiry_date', label:'Expires', width:'15%' },
+        ];
+      case 'order': // RTI or approved aging
+        return [
+          { key:'order_number', label:'#', width:'10%' },
+          { key:'customer', label:'Customer', width:'22%' },
+          { key:'pm', label:'PM', width:'18%' },
+          { key:'status', label:'Status', width:'18%' },
+          { key:'gt', label:'Face', width:'12%', render:v => fmtCurrency(v) },
+          { key:'daysInStatus', label:'Days', width:'10%',
+            render:v => <Badge type={v>90?'red':v>30?'amber':'gray'}>{v}d</Badge> },
+        ];
+      case 'invoice': // overdue invoices
+        return [
+          { key:'invoice_ref', label:'Invoice #', width:'11%' },
+          { key:'customer', label:'Customer', width:'24%' },
+          { key:'invoice_name', label:'Invoice name', width:'28%' },
+          { key:'gt', label:'Amount', width:'13%', render:v => fmtCurrency(v) },
+          { key:'due_date', label:'Due', width:'12%' },
+          { key:'agingDaysDue', label:'Past due', width:'12%',
+            render:v => <Badge type={Math.abs(v)>60?'red':'amber'}>{Math.abs(v)}d</Badge> },
+        ];
+      case 'pm': // cold PMs
+        return [
+          { key:'pm', label:'PM', width:'35%' },
+          { key:'lastQuoteDate', label:'Last quote', width:'18%' },
+          { key:'daysSilent', label:'Days silent', width:'14%',
+            render:v => <Badge type={v>60?'red':'amber'}>{v}d</Badge> },
+          { key:'y1Count', label:'Y1 quotes', width:'14%' },
+        ];
+      case 'dealer': // cold dealers
+        return [
+          { key:'customer', label:'Dealer', width:'40%' },
+          { key:'lastQuoteDate', label:'Last quote', width:'20%' },
+          { key:'daysSilent', label:'Days silent', width:'14%',
+            render:v => <Badge type={v>120?'red':'amber'}>{v}d</Badge> },
+          { key:'y1Count', label:'Y1 quotes', width:'14%' },
+        ];
+      case 'quotes': // momentum drill-down
+        return [
+          { key:'type', label:'Type', width:'10%',
+            render:v => <Badge type={v==='INET'?'purple':'blue'}>{v}</Badge> },
+          { key:'number', label:'#', width:'11%' },
+          { key:'customer', label:'Customer', width:'20%' },
+          { key:'name', label:'Name', width:'24%' },
+          { key:'pm', label:'PM', width:'16%' },
+          { key:'value', label:'Face', width:'12%', render:v => fmtCurrency(v) },
+        ];
+      case 'newPMs':
+        return [
+          { key:'pm', label:'PM', width:'35%' },
+          { key:'dealer', label:'Dealer', width:'30%' },
+          { key:'firstDate', label:'First quote', width:'17%' },
+          { key:'quoteCount', label:'Quotes', width:'14%' },
+        ];
+      case 'newDealers':
+        return [
+          { key:'customer', label:'Dealer', width:'50%' },
+          { key:'firstDate', label:'First quote', width:'22%' },
+          { key:'quoteCount', label:'Quotes', width:'22%' },
+        ];
+      case 'invoices-paid':
+        return [
+          { key:'invoice_ref', label:'Invoice #', width:'11%' },
+          { key:'customer', label:'Customer', width:'28%' },
+          { key:'invoice_name', label:'Name', width:'33%' },
+          { key:'payment_date', label:'Paid date', width:'14%' },
+          { key:'gt', label:'Amount', width:'12%', render:v => fmtCurrency(v) },
+        ];
+      case 'invoices-unpaid':
+        return [
+          { key:'invoice_ref', label:'Invoice #', width:'11%' },
+          { key:'customer', label:'Customer', width:'24%' },
+          { key:'invoice_name', label:'Name', width:'27%' },
+          { key:'gt', label:'Amount', width:'13%', render:v => fmtCurrency(v) },
+          { key:'due_date', label:'Due', width:'13%' },
+          { key:'payment_status', label:'Status', width:'10%',
+            render:v => <Badge type={v==='Partial'?'amber':'gray'}>{v}</Badge> },
+        ];
+      case 'backlog':
+        return [
+          { key:'order_number', label:'#', width:'10%' },
+          { key:'customer', label:'Customer', width:'22%' },
+          { key:'pm', label:'PM', width:'18%' },
+          { key:'status', label:'Status', width:'18%' },
+          { key:'remaining', label:'Remaining', width:'14%', render:(v,r) => fmtCurrency(v || r.gt) },
+          { key:'backlogTier', label:'Tier', width:'16%',
+            render:v => v ? <Badge type={v==='On track'?'green':v==='Ready to invoice'?'green':v==='Slight delay'?'amber':'red'}>{v}</Badge> : '—' },
+        ];
+      case 'pipeline':
+        return [
+          { key:'order_number', label:'#', width:'10%' },
+          { key:'customer', label:'Customer', width:'22%' },
+          { key:'pm', label:'PM', width:'18%' },
+          { key:'cohort', label:'Cohort', width:'14%' },
+          { key:'gt', label:'Face', width:'12%', render:v => fmtCurrency(v) },
+          { key:'pipelineWeighted', label:'Weighted', width:'12%', render:v => fmtCurrency(v || 0) },
+          { key:'daysToExpiry', label:'Exp', width:'10%',
+            render:v => v === null || v === undefined ? '—' : v < 0 ? <Badge type="gray">exp</Badge> : `${v}d` },
+        ];
+      case 'customer-invoices':
+        return [
+          { key:'invoice_ref', label:'Invoice #', width:'12%' },
+          { key:'invoice_name', label:'Name', width:'38%' },
+          { key:'payment_date', label:'Paid', width:'15%' },
+          { key:'yearBucket', label:'Year', width:'13%' },
+          { key:'gt', label:'Amount', width:'15%', render:v => fmtCurrency(v) },
+        ];
+      default:
+        return [{ key:'summary', label:'Item' }];
+    }
+  })();
+
+  const clickHandler = (['order','pipeline','backlog','quote'].includes(type) && onOrderClick)
+    ? onOrderClick : null;
+
+  return (
+    <>
+      <div style={{ fontSize:12, color:C.textMuted, marginBottom:10 }}>
+        {items.length} item{items.length === 1 ? '' : 's'}
+      </div>
+      <Table cols={cols} rows={items} onRowClick={clickHandler} />
+    </>
   );
 }
