@@ -82,9 +82,7 @@ function getBacklogConf(status, daysInStatus) {
 }
 
 // ── CLOSE RATE CALCULATOR ────────────────────────────────────
-// Uses PM×cohort intersection with fallback chain, dollar-weighted
 function buildCloseRates(orders) {
-  // Buckets track dollar-weighted win rates: won$ / (won$ + lost$)
   const pmCohort = {}, pm = {}, dealerCohort = {}, dealer = {}, cohort = {};
 
   orders.forEach(r => {
@@ -106,7 +104,6 @@ function buildCloseRates(orders) {
     if (r.cohort)                inc(cohort, r.cohort);
   });
 
-  // Dollar-weighted rate with minimum sample size
   const rate = (map, key, minDecided) => {
     const d = map[key];
     if (!d || d.decidedN < minDecided) return null;
@@ -116,10 +113,8 @@ function buildCloseRates(orders) {
   };
 
   return {
-    // Returns { rate, source } — source identifies which fallback tier produced the rate
     getRate: (pmName, dealerName, cohortName, isInet) => {
       if (isInet) return { rate: 0.778, source: 'INET fixed' };
-      // Priority: PM×cohort (3+) → PM (5+) → dealer×cohort (5+) → dealer (5+) → cohort (5+) → default
       let r;
       if ((r = rate(pmCohort, `${pmName}|${cohortName}`, 3)) !== null)       return { rate: r, source: 'PM×cohort' };
       if ((r = rate(pm, pmName, 5)) !== null)                                 return { rate: r, source: 'PM' };
@@ -128,7 +123,6 @@ function buildCloseRates(orders) {
       if ((r = rate(cohort, cohortName, 5)) !== null)                         return { rate: r, source: 'Cohort' };
       return { rate: 0.30, source: 'Default' };
     },
-    // Cohort-level dollar-weighted rates for forecasting future quotes
     cohortRates: () => {
       const out = {};
       Object.keys(cohort).forEach(k => {
@@ -142,9 +136,7 @@ function buildCloseRates(orders) {
 }
 
 // ── ENRICH ORDERS ────────────────────────────────────────────
-// Takes raw sheet rows and computes all derived fields
 function enrichOrders(rawOrders) {
-  // First pass — basic fields needed for close rate calc
   const pass1 = rawOrders
     .filter(r => {
       if (EXCLUDE_STATUSES.has(r.status)) return false;
@@ -169,12 +161,10 @@ function enrichOrders(rawOrders) {
       })();
       const cohort = getCohort(gt);
 
-      // Days calculations
       const statusStart = r.approved_start_date || r.inprog_start_date;
       const daysInStatus = statusStart ? daysSinceToday(statusStart) : null;
       const daysPresented = r.lqp_start_date ? daysSinceToday(r.lqp_start_date) : null;
       const daysToExpiry = r.expiry_date ? daysUntilToday(r.expiry_date) : null;
-      // Formal quote = went through LQP stage (has lqp_start_date). Excludes ad-hoc T&M orders.
       const isFormalQuote = !!r.lqp_start_date;
 
       const dinv = parseNum(r.dollars_invoiced);
@@ -190,10 +180,8 @@ function enrichOrders(rawOrders) {
       };
     });
 
-  // Build close rates from pass1 data
   const cr_calc = buildCloseRates(pass1);
 
-  // Second pass — add weighted values
   return pass1.map(r => {
     let pipelineCR = null, pipelineWeighted = null, pipelineCRSource = null;
     if (r.isOpen) {
@@ -238,8 +226,6 @@ function enrichInvoices(rawInvoices, orderMap) {
       const order = orderMap[r.invoice_ref] || orderMap[orderRef];
       const customer = order?.customer || r.customer || 'Pre-acquisition order';
       const isInet = customer.includes('INSTALL Net');
-      // Use payment_date for revenue recognition (when cash was received)
-      // Fall back to invoiced_date if payment_date not available
       const revenueDate = r.payment_date || r.invoiced_date;
       const yearBucket = getYearBucket(revenueDate);
       const month = (() => {
@@ -308,15 +294,13 @@ function enrichInstallnet(rawInet) {
     });
 }
 
-// ── MAIN DATA HOOK ───────────────────────────────────────────
-// All enrichment happens here once when data loads
+// ── ENRICH UNPAID ────────────────────────────────────────────
 function enrichUnpaid(rawUnpaid) {
   const today = new Date();
   today.setHours(0,0,0,0);
   return (rawUnpaid || [])
     .filter(r => !parseBool(r.ignore))
     .map(r => {
-      // Overdue = due_date is in the past
       let isOverdue = false;
       let daysPastDue = null;
       if (r.due_date) {
@@ -342,6 +326,7 @@ function enrichUnpaid(rawUnpaid) {
     });
 }
 
+// ── MAIN DATA HOOK ───────────────────────────────────────────
 export function useEnrichedData(rawData) {
   return useMemo(() => {
     if (!rawData) return null;
@@ -353,8 +338,9 @@ export function useEnrichedData(rawData) {
     const installnet = enrichInstallnet(rawData.installnet || []);
     const contacts = (rawData.contacts || []).filter(r => !parseBool(r.ignore));
     const prospects = (rawData.prospects || []).filter(r => !parseBool(r.ignore));
+    const pm_reviews = rawData.pm_reviews || [];
 
-    return { orders, invoices, unpaid, installnet, contacts, prospects };
+    return { orders, invoices, unpaid, installnet, contacts, prospects, pm_reviews };
   }, [rawData]);
 }
 
@@ -382,20 +368,16 @@ export function useOverviewData(data) {
     if (!data) return null;
     const { orders, invoices, unpaid, installnet } = data;
 
-    // ── REVENUE COLLECTED ────────────────────────────────────
     const yr1Rev = invoices.filter(r => r.yearBucket === 'Year 1').reduce((s,r) => s+r.gt, 0);
     const yr2Rev = invoices.filter(r => r.yearBucket === 'Year 2').reduce((s,r) => s+r.gt, 0);
     const dayOfYear2 = Math.max(1, Math.floor((TODAY - YEAR2_START) / 86400000) + 1);
     const daysRemaining = Math.max(0, 365 - dayOfYear2);
 
-    // ── AR (invoiced, unpaid) ────────────────────────────────
     const arTotal = (unpaid || []).reduce((s,r) => s + r.gt, 0);
     const arWeighted = Math.round(arTotal * 0.98);
     const arOverdue = (unpaid || []).filter(r => r.isOverdue);
     const arOverdueTotal = arOverdue.reduce((s,r) => s + r.gt, 0);
 
-    // ── PIPELINE (open quotes, weighted) ─────────────────────
-    // Non-INET non-XL gets cohort/PM weighting. XL excluded from forecast.
     const openNonInet = orders.filter(r => r.isOpen && !r.isInet);
     const openNonInetExXL = openNonInet.filter(r => r.cohort !== 'XL $50K+');
     const pipelineFaceExXL = openNonInetExXL.reduce((s,r) => s + r.gt, 0);
@@ -405,36 +387,27 @@ export function useOverviewData(data) {
     const pipelineFace = pipelineFaceExXL + inetPipelineFace;
     const pipelineWeighted = pipelineWeightedExXL + inetPipelineWeighted;
 
-    // ── JOBS IN FLIGHT (won, awaiting invoicing, weighted) ───
     const rtiOrders = orders.filter(r => r.status === 'Ready to Invoice');
     const rtiValue = rtiOrders.filter(r => (r.daysInStatus || 0) <= 30)
       .reduce((s,r) => s + (r.remaining || r.gt), 0);
     const backlogOrders = orders.filter(r => r.isBacklog && r.status !== 'Ready to Invoice');
     const backlogFace = backlogOrders.reduce((s,r) => s + (r.remaining || 0), 0);
     const backlogWeighted = backlogOrders.reduce((s,r) => s + (r.backlogWeighted || 0), 0);
-    // Skyline: T&M job with ~$10K/mo and 2-3 months remaining
     const skylineRemaining = 30000;
     const flightFace = rtiValue + backlogFace + skylineRemaining;
     const flightWeighted = Math.round(rtiValue * 0.95 + backlogWeighted + skylineRemaining * 0.90);
 
-    // ── COMMITTED = Collected + AR + In Flight + Pipeline ───
     const committed = yr2Rev + arWeighted + flightWeighted + pipelineWeighted;
 
-    // ── FUTURE QUOTE FORECAST (scenarios) ───────────────────
-    // Base: Year 1 monthly quote flow × cohort dollar-weighted CRs × months remaining (capped by 86-day sales cycle)
-    // Bear: 2nd-worst month of Year 1 applied same way
-    // Bull: trailing 90-day pace, only if > Year 1 avg
     const NON_INET_SALES_CYCLE_DAYS = 86;
     const INET_SALES_CYCLE_DAYS = 37;
-    // Quotes created after day (365 - cycle) won't convert to Year 2 revenue
     const nonInetEffectiveDays = Math.max(0, Math.min(daysRemaining, 365 - NON_INET_SALES_CYCLE_DAYS - dayOfYear2));
     const inetEffectiveDays    = Math.max(0, Math.min(daysRemaining, 365 - INET_SALES_CYCLE_DAYS - dayOfYear2));
 
-    // Compute Year 1 monthly non-INET formal quote dollars by cohort (ex-XL)
     const y1NonInetFormal = orders.filter(r =>
       r.yearBucket === 'Year 1' && !r.isInet && r.isFormalQuote && r.cohort !== 'XL $50K+'
     );
-    const y1MonthlyByCohort = {}; // cohort -> { [month]: dollars }
+    const y1MonthlyByCohort = {};
     y1NonInetFormal.forEach(r => {
       const d = new Date(r.created_date);
       if (isNaN(d)) return;
@@ -442,9 +415,7 @@ export function useOverviewData(data) {
       if (!y1MonthlyByCohort[r.cohort]) y1MonthlyByCohort[r.cohort] = {};
       y1MonthlyByCohort[r.cohort][mkey] = (y1MonthlyByCohort[r.cohort][mkey] || 0) + r.gt;
     });
-    // Base monthly cohort quote dollars (12-month average)
     const baseCohortQuoteMo = {};
-    // Bear monthly cohort quote dollars (2nd-worst total month scaled)
     const cohortLabels = ['XS <$1K','S $1K-5K','M $5K-15K','L $15K-50K'];
     cohortLabels.forEach(c => {
       const m = y1MonthlyByCohort[c] || {};
@@ -453,7 +424,6 @@ export function useOverviewData(data) {
       baseCohortQuoteMo[c] = total / 12;
     });
 
-    // Year 1 total monthly quote dollars (non-INET ex-XL, all cohorts)
     const y1TotalByMonth = {};
     y1NonInetFormal.forEach(r => {
       const d = new Date(r.created_date);
@@ -465,54 +435,44 @@ export function useOverviewData(data) {
     const y1AvgMonthly = y1MonthlyTotals.reduce((s,v) => s+v, 0) / Math.max(y1MonthlyTotals.length, 1);
     const y1SecondWorstMonthly = y1MonthlyTotals.length >= 2 ? y1MonthlyTotals[1] : (y1MonthlyTotals[0] || 0);
 
-    // Cohort dollar-weighted close rates
     const cr_calc = buildCloseRates(orders);
     const cohortCRs = cr_calc.cohortRates();
 
-    // Base monthly expected revenue from non-INET future quotes
     const baseMoExpected = cohortLabels.reduce((s, c) => {
       const qMo = baseCohortQuoteMo[c] || 0;
       const cr = cohortCRs[c] || 0.30;
       return s + qMo * cr;
     }, 0);
-    // Bear: use 2nd-worst month as proxy, distribute across cohorts proportionally
     const y1AvgMoTotal = Object.values(baseCohortQuoteMo).reduce((s,v) => s+v, 0);
     const bearScale = y1AvgMoTotal > 0 ? y1SecondWorstMonthly / y1AvgMoTotal : 0;
     const bearMoExpected = baseMoExpected * bearScale;
 
-    // INET: Year 1 revenue avg / 12 ≈ $70K/mo actual collected
     const y1InetRev = invoices.filter(r => r.yearBucket === 'Year 1' && r.channel === 'INSTALL Net').reduce((s,r) => s+r.gt, 0);
     const inetMoExpected = y1InetRev / 12;
 
-    // Compute future revenue (ex-XL, from quotes not yet sent)
     const nonInetEffectiveMonths = nonInetEffectiveDays / 30;
     const inetEffectiveMonths    = inetEffectiveDays / 30;
 
     const baseFuture = baseMoExpected * nonInetEffectiveMonths + inetMoExpected * inetEffectiveMonths;
     const bearFuture = bearMoExpected * nonInetEffectiveMonths + inetMoExpected * inetEffectiveMonths * 0.7;
 
-    // Bull: trailing 90-day non-INET formal pace
     const cutoff90 = new Date(TODAY - 90 * 86400000);
     const trailing90 = y1NonInetFormal.concat(
       orders.filter(r => r.yearBucket === 'Year 2' && !r.isInet && r.isFormalQuote && r.cohort !== 'XL $50K+')
     ).filter(r => new Date(r.created_date) >= cutoff90);
     const trailing90Dollars = trailing90.reduce((s,r) => s+r.gt, 0);
     const trailing90MoDollars = trailing90Dollars / 3;
-    // Scale bull only if > Y1 avg
     const bullScale = trailing90MoDollars > y1AvgMonthly ? trailing90MoDollars / y1AvgMonthly : 1.0;
     const bullMoExpected = baseMoExpected * bullScale;
     const bullFuture = bullMoExpected * nonInetEffectiveMonths + inetMoExpected * inetEffectiveMonths * 1.1;
 
-    // Forecast totals = committed + future
     const forecastBase = committed + baseFuture;
     const forecastBear = committed + bearFuture;
     const forecastBull = committed + bullFuture;
 
-    // Coverage: how many months of $3M target does committed cover?
     const monthlyTarget = 3000000 / 12;
     const coverageMonths = committed / monthlyTarget;
 
-    // ── XL BOUNTY (open $50K+ non-INET quotes) ───────────────
     const xlBounty = orders
       .filter(r => r.isOpen && !r.isInet && r.gt >= 50000)
       .sort((a,b) => b.gt - a.gt)
@@ -524,24 +484,19 @@ export function useOverviewData(data) {
         gt: r.gt,
       }));
 
-    // ── MOMENTUM (last 30 days) ──────────────────────────────
     const cutoff30 = new Date(TODAY - 30 * 86400000);
 
-    // Non-INET formal quotes, last 30 days
     const nonInetFormal30 = orders.filter(r =>
       !r.isInet && r.isFormalQuote && new Date(r.created_date) >= cutoff30
     );
     const nonInetDollars30 = nonInetFormal30.reduce((s,r) => s+r.gt, 0);
 
-    // INET quotes, last 30 days
     const inet30 = installnet.filter(r => r.date_requested && new Date(r.date_requested) >= cutoff30);
     const inetDollars30 = inet30.reduce((s,r) => s+r.price, 0);
 
-    // Total
     const totalQuotes30 = nonInetFormal30.length + inet30.length;
     const totalQuotesDollars30 = nonInetDollars30 + inetDollars30;
 
-    // Build unified list for drill-down (ordered by most recent)
     const allQuotes30 = [
       ...nonInetFormal30.map(r => ({
         type: 'Non-INET',
@@ -565,24 +520,20 @@ export function useOverviewData(data) {
       })),
     ].sort((a,b) => new Date(b.date) - new Date(a.date));
 
-    // Year 1 monthly baselines (non-INET formal)
     const y1NonInetFormalCount = y1NonInetFormal.length;
     const y1NonInetFormalDollars = y1NonInetFormal.reduce((s,r) => s+r.gt, 0);
     const y1MonthlyNonInetFormal = y1NonInetFormalCount / 12;
     const y1MonthlyNonInetDollars = y1NonInetFormalDollars / 12;
 
-    // Year 1 monthly baselines (INET) — count and dollars
     const y1Inet = installnet.filter(r => r.yearBucket === 'Year 1');
     const y1InetCount = y1Inet.length;
     const y1InetQuoteDollars = y1Inet.reduce((s,r) => s+r.price, 0);
     const y1MonthlyInetCount = y1InetCount / 12;
     const y1MonthlyInetDollars = y1InetQuoteDollars / 12;
 
-    // Year 1 totals
     const y1MonthlyTotalQuotes = (y1NonInetFormalCount + y1InetCount) / 12;
     const y1MonthlyTotalDollars = (y1NonInetFormalDollars + y1InetQuoteDollars) / 12;
 
-    // Deltas: count and dollar for each channel
     const deltaPct = (current, baseline) => baseline > 0 ? (current - baseline) / baseline : 0;
     const nonInetCountDelta  = deltaPct(nonInetFormal30.length, y1MonthlyNonInetFormal);
     const nonInetDollarDelta = deltaPct(nonInetDollars30,       y1MonthlyNonInetDollars);
@@ -590,7 +541,6 @@ export function useOverviewData(data) {
     const inetDollarDelta    = deltaPct(inetDollars30,          y1MonthlyInetDollars);
     const totalQuotesDelta   = deltaPct(totalQuotes30,          y1MonthlyTotalQuotes);
 
-    // New PMs in last 30 days (first-ever quote anywhere in our data)
     const pmFirstSeen = {};
     orders.forEach(r => {
       if (!r.pm) return;
@@ -607,7 +557,6 @@ export function useOverviewData(data) {
       })
       .sort((a,b) => b.quoteCount - a.quoteCount);
 
-    // New dealers in last 60 days
     const cutoff60 = new Date(TODAY - 60 * 86400000);
     const dealerFirstSeen = {};
     orders.forEach(r => {
@@ -624,22 +573,16 @@ export function useOverviewData(data) {
       })
       .sort((a,b) => b.quoteCount - a.quoteCount);
 
-    // ── ATTENTION LIST (data-resolved) ────────────────────────
-    // L+ quotes expiring within 14 days
     const expiring14 = orders.filter(r =>
       r.isOpen && r.gt >= 15000 && r.daysToExpiry !== null && r.daysToExpiry >= 0 && r.daysToExpiry <= 14
     );
-    const expiring14Names = [...new Set(expiring14.map(r => (r.customer || '').split(' ')[0]))].slice(0, 4).join(', ');
 
-    // RTI > 7 days
     const rtiOver7 = orders.filter(r =>
       r.status === 'Ready to Invoice' && (r.daysInStatus || 0) > 7
     );
 
-    // AR past due (using unpaid with isOverdue)
     const arOverdueValue = arOverdue.reduce((s,r) => s+r.gt, 0);
 
-    // Cold PMs — PM silent for 21+ days (last quote > 21 days ago, had quotes in prior 90 days)
     const pmLastSeen = {};
     orders.forEach(r => {
       if (!r.pm || !r.created_date) return;
@@ -648,22 +591,19 @@ export function useOverviewData(data) {
       if (!pmLastSeen[r.pm] || d > pmLastSeen[r.pm]) pmLastSeen[r.pm] = d;
     });
     const cutoff21 = new Date(TODAY - 21 * 86400000);
-    const cutoff112 = new Date(TODAY - 112 * 86400000); // 21 + 91 days
+    const cutoff112 = new Date(TODAY - 112 * 86400000);
     const coldPMs = Object.entries(pmLastSeen).filter(([pm, lastDate]) => {
-      if (lastDate >= cutoff21) return false; // not silent
-      if (lastDate < cutoff112) return false; // been gone too long to count as "going cold"
-      // had 3+ quotes in Year 1 (active relationship)
+      if (lastDate >= cutoff21) return false;
+      if (lastDate < cutoff112) return false;
       const y1Count = orders.filter(r => r.pm === pm && r.yearBucket === 'Year 1').length;
       return y1Count >= 3;
     }).map(([pm]) => pm);
 
-    // Approved orders aging 90+ days
     const approvedAging90 = orders.filter(r =>
       r.status === 'Approved Order' && (r.daysInStatus || 0) > 90
     );
     const approvedAging90Value = approvedAging90.reduce((s,r) => s + (r.remaining || r.gt), 0);
 
-    // Dealers going cold — dealer with 3+ Year 1 quotes but no quote in 60 days
     const dealerLastSeen = {};
     orders.forEach(r => {
       if (!r.customer || !r.created_date || r.isInet) return;
@@ -677,7 +617,6 @@ export function useOverviewData(data) {
       return y1Count >= 3;
     }).map(([c]) => c);
 
-    // Cold dealers — enrich with last seen date
     const coldDealerDetails = coldDealers.map(c => {
       const last = dealerLastSeen[c];
       const y1Count = orders.filter(r => r.customer === c && r.yearBucket === 'Year 1').length;
@@ -689,7 +628,6 @@ export function useOverviewData(data) {
       };
     }).sort((a,b) => (b.daysSilent||0) - (a.daysSilent||0));
 
-    // Cold PMs — enrich with last seen
     const coldPMDetails = coldPMs.map(pm => {
       const last = pmLastSeen[pm];
       const y1Count = orders.filter(r => r.pm === pm && r.yearBucket === 'Year 1').length;
@@ -701,7 +639,6 @@ export function useOverviewData(data) {
       };
     }).sort((a,b) => (b.daysSilent||0) - (a.daysSilent||0));
 
-    // Smart detail text — handle single-item specially
     const smartDetail = (items, getName, fallback) => {
       if (items.length === 0) return fallback;
       if (items.length === 1) return getName(items[0]);
@@ -758,7 +695,6 @@ export function useOverviewData(data) {
         show: coldDealerDetails.length > 0 },
     ].filter(x => x.show);
 
-    // ── CONCENTRATION (simplified) ───────────────────────────
     const custY1 = {}, custY2 = {};
     invoices.filter(r => r.yearBucket === 'Year 1').forEach(r => {
       custY1[r.customer] = (custY1[r.customer] || 0) + r.gt;
@@ -782,7 +718,6 @@ export function useOverviewData(data) {
         };
       });
 
-    // New PMs and dealers — Year 1 growth story (3+ quotes, clean)
     const y1PMsByCount = {};
     orders.filter(r => r.yearBucket === 'Year 1' && !r.isInet).forEach(r => {
       if (r.pm) y1PMsByCount[r.pm] = (y1PMsByCount[r.pm] || 0) + 1;
@@ -804,10 +739,8 @@ export function useOverviewData(data) {
       .filter(([d, c]) => !preAcqDealers.has(d) && c >= 3).length;
 
     return {
-      // Year context
       yr1Rev, yr2Rev, dayOfYear2, daysRemaining,
 
-      // Year 2 forecast
       forecastBase: Math.round(forecastBase),
       forecastBear: Math.round(forecastBear),
       forecastBull: Math.round(forecastBull),
@@ -816,7 +749,6 @@ export function useOverviewData(data) {
       coverageMonths,
       pctOfTarget: forecastBase / 3000000,
 
-      // Composition (for the bar)
       arTotal: Math.round(arTotal), arWeighted,
       flightFace: Math.round(flightFace),
       flightWeighted: Math.round(flightWeighted),
@@ -826,11 +758,9 @@ export function useOverviewData(data) {
       pipelineFace: Math.round(pipelineFace),
       pipelineWeighted: Math.round(pipelineWeighted),
 
-      // XL bounty
       xlBounty,
       xlBountyFace: xlBounty.reduce((s,r) => s+r.gt, 0),
 
-      // Momentum — Non-INET
       nonInetQuotes30: nonInetFormal30.length,
       nonInetDollars30: Math.round(nonInetDollars30),
       nonInetCountDelta,
@@ -839,7 +769,6 @@ export function useOverviewData(data) {
       y1MonthlyNonInetCount: Math.round(y1MonthlyNonInetFormal),
       y1MonthlyNonInetDollars: Math.round(y1MonthlyNonInetDollars),
 
-      // Momentum — INET
       inetQuotes30: inet30.length,
       inetDollars30: Math.round(inetDollars30),
       inetCountDelta,
@@ -848,7 +777,6 @@ export function useOverviewData(data) {
       y1MonthlyInetCount: Math.round(y1MonthlyInetCount),
       y1MonthlyInetDollars: Math.round(y1MonthlyInetDollars),
 
-      // Momentum — Total (for banner logic)
       totalQuotes30, totalQuotesDollars30: Math.round(totalQuotesDollars30),
       totalQuotesDelta,
       totalQuotes30Items: allQuotes30,
@@ -858,48 +786,35 @@ export function useOverviewData(data) {
       newDealers60: newDealers60.length,
       newDealers60Items: newDealers60,
 
-      // Attention
       attentionList,
 
-      // Concentration & growth story
       concentration,
       newPMsY1, newDealersY1,
     };
   }, [data]);
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// usePipelineData — REPLACES the existing usePipelineData function in
-// /src/utils/dataHooks.js. Just paste this function over the old one.
-//
-// Relies on these imports already present in dataHooks.js:
-//   - useMemo (React)
-//   - TODAY, YEAR2_START constants
-//   - parseNum helper
-// ─────────────────────────────────────────────────────────────────────────
-
+// ── PIPELINE DATA HOOK ───────────────────────────────────────
+// Includes: INET wins, T&M-excluded win rate, XL toggle, PM review queue
 export function usePipelineData(data) {
   return useMemo(() => {
     if (!data) return null;
     const { orders, installnet, pm_reviews } = data;
 
-    // ── CURRENT DATE CONTEXT ─────────────────────────────────────────
+    // ── CURRENT DATE CONTEXT ─────────────────────────────────
     const today = new Date(TODAY);
     today.setHours(0, 0, 0, 0);
     const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-    const currentMonthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0); // last day this month
+    const currentMonthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
     const daysInMonth = currentMonthEnd.getDate();
     const dayOfMonth = today.getDate();
     const monthProgress = dayOfMonth / daysInMonth;
 
     const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-    const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
 
-    // Current quarter bounds
     const currentQ = Math.floor(today.getMonth() / 3);
     const currentQuarterStart = new Date(today.getFullYear(), currentQ * 3, 1);
 
-    // Year 2 start for YTD stats
     const year2Start = new Date(YEAR2_START);
 
     const parseDate = (v) => {
@@ -908,8 +823,6 @@ export function usePipelineData(data) {
       return isNaN(d) ? null : d;
     };
 
-    // Helper: figure out "won date" for a won order
-    // Priority: approved_start_date → inprog_start_date → most recent status log
     const getWonDate = (r) => {
       return parseDate(r.approved_start_date)
           || parseDate(r.inprog_start_date)
@@ -918,12 +831,18 @@ export function usePipelineData(data) {
           || null;
     };
 
-    // ── WINS THIS WEEK / MONTH / LAST MONTH ──────────────────────────
+    // ── WINS: non-INET uses won-date fields, INET uses created_date ──
     const weekAgo = new Date(today - 7 * 86400000);
 
-    const wonOrders = orders.filter(r => r.isWon && !r.isInet);
-    const wonWithDates = wonOrders.map(r => ({ ...r, wonDate: getWonDate(r) }))
-                                   .filter(r => r.wonDate);
+    const wonNonInet = orders.filter(r => r.isWon && !r.isInet)
+      .map(r => ({ ...r, wonDate: getWonDate(r) }))
+      .filter(r => r.wonDate);
+
+    const wonInet = orders.filter(r => r.isWon && r.isInet)
+      .map(r => ({ ...r, wonDate: parseDate(r.created_date) }))
+      .filter(r => r.wonDate);
+
+    const wonWithDates = [...wonNonInet, ...wonInet];
 
     const winsThisWeek = wonWithDates.filter(r => r.wonDate >= weekAgo)
                                       .sort((a, b) => b.gt - a.gt);
@@ -935,12 +854,14 @@ export function usePipelineData(data) {
     const winsThisMonthValue = winsThisMonth.reduce((s, r) => s + r.gt, 0);
     const winsLastMonthValue = winsLastMonth.reduce((s, r) => s + r.gt, 0);
 
-    // ── WIN RATE L90d (with breakdown for drill-down) ────────────────
+    // ── WIN RATE L90d — FORMAL QUOTES ONLY (excludes T&M) ────
     const cutoff90 = new Date(today - 90 * 86400000);
 
-    // Only count quotes CREATED in last 90 days AND decided (won or lost)
+    const isFormalDecided = (r) =>
+      !r.isInet && r.isDecided && !!r.lqp_start_date;
+
     const decidedL90 = orders.filter(r =>
-      !r.isInet && r.isDecided &&
+      isFormalDecided(r) &&
       parseDate(r.created_date) && parseDate(r.created_date) >= cutoff90
     );
     const winsL90 = decidedL90.filter(r => r.isWon);
@@ -951,23 +872,22 @@ export function usePipelineData(data) {
       return totalValue > 0 ? wonValue / totalValue : null;
     })();
 
-    // Year 1 baseline win rate (count-based, weighted by dollar)
     const y1Decided = orders.filter(r =>
-      !r.isInet && r.isDecided && r.yearBucket === 'Year 1'
+      isFormalDecided(r) && r.yearBucket === 'Year 1'
     );
     const y1Won = y1Decided.filter(r => r.isWon);
     const winRateY1Count = y1Decided.length > 0 ? y1Won.length / y1Decided.length : null;
 
-    // Win rate by PM (L90d, 5+ decided)
+    // Win rate by PM with orders attached for drill-down
     const winRateByPM = (() => {
       const map = {};
       decidedL90.forEach(r => {
         if (!r.pm) return;
-        if (!map[r.pm]) map[r.pm] = { decided: 0, won: 0, y1Rate: null };
+        if (!map[r.pm]) map[r.pm] = { decided: 0, won: 0, orders: [] };
         map[r.pm].decided++;
         if (r.isWon) map[r.pm].won++;
+        map[r.pm].orders.push(r);
       });
-      // Enrich with Year 1 rate for comparison
       y1Decided.forEach(r => {
         if (!map[r.pm]) return;
         if (!map[r.pm]._y1) map[r.pm]._y1 = { decided: 0, won: 0 };
@@ -982,18 +902,20 @@ export function usePipelineData(data) {
           won: v.won,
           rate: v.won / v.decided,
           y1Rate: v._y1 && v._y1.decided >= 5 ? v._y1.won / v._y1.decided : null,
+          orders: v.orders.sort((a, b) => b.gt - a.gt),
         }))
         .sort((a, b) => b.decided - a.decided);
     })();
 
-    // Win rate by dealer
+    // Win rate by dealer with orders attached for drill-down
     const winRateByDealer = (() => {
       const map = {};
       decidedL90.forEach(r => {
         if (!r.customer) return;
-        if (!map[r.customer]) map[r.customer] = { decided: 0, won: 0 };
+        if (!map[r.customer]) map[r.customer] = { decided: 0, won: 0, orders: [] };
         map[r.customer].decided++;
         if (r.isWon) map[r.customer].won++;
+        map[r.customer].orders.push(r);
       });
       y1Decided.forEach(r => {
         if (!map[r.customer]) return;
@@ -1009,11 +931,11 @@ export function usePipelineData(data) {
           won: v.won,
           rate: v.won / v.decided,
           y1Rate: v._y1 && v._y1.decided >= 5 ? v._y1.won / v._y1.decided : null,
+          orders: v.orders.sort((a, b) => b.gt - a.gt),
         }))
         .sort((a, b) => b.decided - a.decided);
     })();
 
-    // Win rate by cohort
     const winRateByCohort = (() => {
       const cohorts = ['XS <$1K', 'S $1K-5K', 'M $5K-15K', 'L $15K-50K', 'XL $50K+'];
       return cohorts.map(c => {
@@ -1031,9 +953,10 @@ export function usePipelineData(data) {
       }).filter(r => r.decided > 0);
     })();
 
-    // ── QUOTE PACE — THIS MONTH (count + value) ─────────────────────
-    // "Formal quote" = has lqp_start_date (for non-INET), or any INET record
+    // ── QUOTE PACE — DUAL METRICS (with/without XL) ──────────
     const isFormalNonInet = (r) => !r.isInet && !!r.lqp_start_date;
+    const isXL = (r) => (r.gt || 0) >= 50000;
+    const inetIsXL = (r) => (r.price || 0) >= 50000;
 
     const formalThisMonth = orders.filter(r => {
       if (!isFormalNonInet(r)) return false;
@@ -1045,13 +968,18 @@ export function usePipelineData(data) {
       return d && d >= currentMonthStart && d <= today;
     });
 
-    const quotesThisMonthCount = formalThisMonth.length + inetThisMonth.length;
-    const quotesThisMonthValue = formalThisMonth.reduce((s, r) => s + r.gt, 0)
-                               + inetThisMonth.reduce((s, r) => s + r.price, 0);
+    const paceMetrics = (formalArr, inetArr) => ({
+      count: formalArr.length + inetArr.length,
+      value: formalArr.reduce((s, r) => s + r.gt, 0)
+           + inetArr.reduce((s, r) => s + r.price, 0),
+    });
 
-    // ── TRAILING 3-MONTH AVERAGE ────────────────────────────────────
-    // Sum all formal quotes in the last 3 complete months + divide by 3
-    // "Last 3 complete months" = 3 months ending at start of current month
+    const thisMonthWithXL = paceMetrics(formalThisMonth, inetThisMonth);
+    const thisMonthNoXL   = paceMetrics(
+      formalThisMonth.filter(r => !isXL(r)),
+      inetThisMonth.filter(r => !inetIsXL(r))
+    );
+
     const threeMoStart = new Date(today.getFullYear(), today.getMonth() - 3, 1);
 
     const formal3mo = orders.filter(r => {
@@ -1064,48 +992,63 @@ export function usePipelineData(data) {
       return d && d >= threeMoStart && d < currentMonthStart;
     });
 
-    const trailingMo3Count = (formal3mo.length + inet3mo.length) / 3;
-    const trailingMo3Value = (
-      formal3mo.reduce((s, r) => s + r.gt, 0) +
-      inet3mo.reduce((s, r) => s + r.price, 0)
-    ) / 3;
+    const m3WithXL = paceMetrics(formal3mo, inet3mo);
+    const m3NoXL   = paceMetrics(
+      formal3mo.filter(r => !isXL(r)),
+      inet3mo.filter(r => !inetIsXL(r))
+    );
 
-    // ── ALL-TIME BEST MONTH (count + value, separately) ──────────────
-    // Build month buckets from ALL formal quotes + INET ever
-    const monthBuckets = {};
+    const trailingMo3CountWithXL = m3WithXL.count / 3;
+    const trailingMo3ValueWithXL = m3WithXL.value / 3;
+    const trailingMo3CountNoXL   = m3NoXL.count / 3;
+    const trailingMo3ValueNoXL   = m3NoXL.value / 3;
+
+    // All-time best — two parallel bucket maps (with/without XL)
+    const buildBuckets = (excludeXL) => {
+      const buckets = {};
+      const bk = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      orders.filter(isFormalNonInet).forEach(r => {
+        if (excludeXL && isXL(r)) return;
+        const d = parseDate(r.created_date);
+        if (!d) return;
+        const k = bk(d);
+        if (!buckets[k]) buckets[k] = { count: 0, value: 0 };
+        buckets[k].count++;
+        buckets[k].value += r.gt;
+      });
+      installnet.forEach(r => {
+        if (excludeXL && inetIsXL(r)) return;
+        const d = parseDate(r.date_requested);
+        if (!d) return;
+        const k = bk(d);
+        if (!buckets[k]) buckets[k] = { count: 0, value: 0 };
+        buckets[k].count++;
+        buckets[k].value += r.price;
+      });
+      return buckets;
+    };
+
     const bucketKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    orders.filter(isFormalNonInet).forEach(r => {
-      const d = parseDate(r.created_date);
-      if (!d) return;
-      const k = bucketKey(d);
-      if (!monthBuckets[k]) monthBuckets[k] = { count: 0, value: 0 };
-      monthBuckets[k].count++;
-      monthBuckets[k].value += r.gt;
-    });
-    installnet.forEach(r => {
-      const d = parseDate(r.date_requested);
-      if (!d) return;
-      const k = bucketKey(d);
-      if (!monthBuckets[k]) monthBuckets[k] = { count: 0, value: 0 };
-      monthBuckets[k].count++;
-      monthBuckets[k].value += r.price;
-    });
-
-    // Exclude current month from all-time best (it's not complete yet)
     const currentKey = bucketKey(today);
-    const completeMonths = Object.entries(monthBuckets).filter(([k]) => k !== currentKey);
-    const allTimeBestCount = completeMonths.reduce((m, [, v]) => Math.max(m, v.count), 0);
-    const allTimeBestValue = completeMonths.reduce((m, [, v]) => Math.max(m, v.value), 0);
 
-    // ── PROJECTION FOR MONTH-END ─────────────────────────────────────
-    // If we're on day 22 of 30, extrapolate to 30
-    const projectedMonthEndCount = monthProgress > 0
-      ? Math.round(quotesThisMonthCount / monthProgress) : 0;
-    const projectedMonthEndValue = monthProgress > 0
-      ? Math.round(quotesThisMonthValue / monthProgress) : 0;
+    const bestFromBuckets = (b) => {
+      const complete = Object.entries(b).filter(([k]) => k !== currentKey);
+      return {
+        count: complete.reduce((m, [, v]) => Math.max(m, v.count), 0),
+        value: complete.reduce((m, [, v]) => Math.max(m, v.value), 0),
+      };
+    };
 
-    // ── SOURCING: NEW PMs THIS MONTH / NEW DEALERS THIS QUARTER ──────
-    // PM first-ever quote seen in our data
+    const bestWithXL = bestFromBuckets(buildBuckets(false));
+    const bestNoXL   = bestFromBuckets(buildBuckets(true));
+
+    const project = (current) => monthProgress > 0 ? Math.round(current / monthProgress) : 0;
+    const projectedMonthEndCountWithXL = project(thisMonthWithXL.count);
+    const projectedMonthEndValueWithXL = project(thisMonthWithXL.value);
+    const projectedMonthEndCountNoXL   = project(thisMonthNoXL.count);
+    const projectedMonthEndValueNoXL   = project(thisMonthNoXL.value);
+
+    // ── SOURCING: NEW PMs / NEW DEALERS ──────────────────────
     const pmFirstSeen = {};
     orders.forEach(r => {
       if (!r.pm) return;
@@ -1126,7 +1069,6 @@ export function usePipelineData(data) {
       });
     const newPMsY2YTD = Object.values(pmFirstSeen).filter(d => d >= year2Start && d <= today).length;
 
-    // Dealer first-ever
     const dealerFirstSeen = {};
     orders.forEach(r => {
       if (!r.customer) return;
@@ -1148,16 +1090,12 @@ export function usePipelineData(data) {
       });
     const newDealersY2YTD = Object.values(dealerFirstSeen).filter(d => d >= year2Start && d <= today).length;
 
-    // ── MOONSHOTS: open non-INET $50K+ ───────────────────────────────
+    // ── MOONSHOTS ────────────────────────────────────────────
     const moonshots = orders.filter(r => r.isOpen && !r.isInet && r.gt >= 50000)
-      .map(r => ({
-        ...r,
-        age: r.daysPresented || 0,
-      }))
+      .map(r => ({ ...r, age: r.daysPresented || 0 }))
       .sort((a, b) => b.gt - a.gt);
 
-    // ── PM DECISION LAG (per PM, median days quote→decision) ──────────
-    // Only for non-INET with lqp_start_date (formal quotes) that were decided
+    // ── PM DECISION LAG ──────────────────────────────────────
     const pmDecisionLags = {};
     orders.forEach(r => {
       if (r.isInet || !r.pm || !r.isDecided) return;
@@ -1171,7 +1109,7 @@ export function usePipelineData(data) {
       }
       if (!decisionDate || decisionDate < lqp) return;
       const lag = Math.floor((decisionDate - lqp) / 86400000);
-      if (lag > 365) return; // exclude outliers
+      if (lag > 365) return;
       if (!pmDecisionLags[r.pm]) pmDecisionLags[r.pm] = [];
       pmDecisionLags[r.pm].push(lag);
     });
@@ -1183,14 +1121,12 @@ export function usePipelineData(data) {
       pmMedians[pm] = sorted[Math.floor(sorted.length / 2)];
     });
 
-    // Overall non-INET median for fallback
     const allLags = Object.values(pmDecisionLags).flat().sort((a, b) => a - b);
     const overallMedian = allLags.length > 0
       ? allLags[Math.floor(allLags.length / 2)]
       : 59;
 
-    // ── PM REVIEW LOG (from Google Form responses, if present) ───────
-    // pm_reviews tab shape: [{ pm_name, review_date, notes, timestamp }, ...]
+    // ── PM REVIEW LOG (from Google Form responses) ───────────
     const reviewLog = {};
     (pm_reviews || []).forEach(r => {
       const pmName = r.pm_name || r.pm;
@@ -1205,16 +1141,9 @@ export function usePipelineData(data) {
       }
     });
 
-    // ── PM REVIEW QUEUE ──────────────────────────────────────────────
-    // A PM is due for review if ANY of these triggers fire:
-    //   1. They have an open L+ quote at age ≥ max(PM_median - 14, 7)
-    //   2. They're silent 21+ days AND have open pipeline
-    //   3. They have an L+ quote expiring in ≤ 14 days
-    // All triggers L+ only ($15K+)
-
+    // ── PM REVIEW QUEUE ──────────────────────────────────────
     const openLPlus = orders.filter(r => r.isOpen && !r.isInet && r.gt >= 15000);
 
-    // Last quote date per PM (non-INET)
     const pmLastQuote = {};
     orders.filter(r => !r.isInet && r.pm).forEach(r => {
       const d = parseDate(r.created_date);
@@ -1222,7 +1151,6 @@ export function usePipelineData(data) {
       if (!pmLastQuote[r.pm] || d > pmLastQuote[r.pm]) pmLastQuote[r.pm] = d;
     });
 
-    // Group open L+ quotes by PM to build review queue entries
     const pmQueueMap = {};
     openLPlus.forEach(r => {
       if (!r.pm) return;
@@ -1239,12 +1167,10 @@ export function usePipelineData(data) {
       pmQueueMap[r.pm].openValue += r.gt;
     });
 
-    // Evaluate triggers for each PM
     const reviewQueue = Object.values(pmQueueMap).map(entry => {
       const reasons = [];
-      let severity = 'amber'; // default
+      let severity = 'amber';
 
-      // Trigger 1: decision window approaching
       const pmMedian = pmMedians[entry.pm] ?? overallMedian;
       const windowThreshold = Math.max(pmMedian - 14, 7);
       const inWindow = entry.openQuotes.filter(q =>
@@ -1257,14 +1183,12 @@ export function usePipelineData(data) {
           : `decision window · ${count} quotes`);
       }
 
-      // Trigger 2: silent 21+ with open pipeline
       const lastQ = pmLastQuote[entry.pm];
       const silentDays = lastQ ? Math.floor((today - lastQ) / 86400000) : null;
       if (silentDays !== null && silentDays >= 21) {
         reasons.push(`silent ${silentDays}d · has open quotes`);
       }
 
-      // Trigger 3: L+ quote expiring in ≤ 14 days
       const expiringSoon = entry.openQuotes.filter(q =>
         q.daysToExpiry !== null && q.daysToExpiry >= 0 && q.daysToExpiry <= 14
       );
@@ -1276,7 +1200,6 @@ export function usePipelineData(data) {
         if (soonest <= 7) severity = 'red';
       }
 
-      // Time since last review (lowers priority if recently reviewed)
       const lastReview = reviewLog[entry.pm];
       const daysSinceReview = lastReview ? lastReview.daysAgo : null;
 
@@ -1294,52 +1217,43 @@ export function usePipelineData(data) {
         lastReviewNotes: lastReview?.notes || '',
       };
     }).filter(entry => {
-      // If PM was reviewed in last 7 days AND no red triggers, skip
       if (entry.severity !== 'red' && entry.daysSinceReview !== null && entry.daysSinceReview < 7) {
         return false;
       }
       return entry.reasons.length > 0;
     }).sort((a, b) => {
-      // Red severity first, then by open value desc
       if (a.severity !== b.severity) return a.severity === 'red' ? -1 : 1;
       return b.openValue - a.openValue;
     });
 
-    // ── RECENTLY EXPIRED L+ (last 45 days, rescue candidates) ────────
+    // ── RECENTLY EXPIRED L+ (last 45 days) ───────────────────
     const recentlyExpired = orders.filter(r =>
       r.status === 'Labor Quote Expired' && r.gt >= 15000 &&
       r.daysToExpiry !== null && r.daysToExpiry < 0 && r.daysToExpiry > -45
     ).sort((a, b) => (b.daysToExpiry || 0) - (a.daysToExpiry || 0));
 
-    // ── LARGE OPEN JOBS ($15K-$50K) ──────────────────────────────────
+    // ── LARGE OPEN JOBS ($15K-$50K) ──────────────────────────
     const largeOpenJobs = orders.filter(r =>
       r.isOpen && !r.isInet && r.gt >= 15000 && r.gt < 50000
-    ).map(r => ({
-      ...r,
-      age: r.daysPresented || 0,
-    }));
+    ).map(r => ({ ...r, age: r.daysPresented || 0 }));
 
     return {
-      // Date context
       today: today.toISOString().slice(0, 10),
       dayOfMonth,
       daysInMonth,
       monthName: today.toLocaleString('default', { month: 'long' }),
       year: today.getFullYear(),
 
-      // Wins ticker
       winsThisWeek,
       winsThisWeekCount: winsThisWeek.length,
       winsThisWeekValue: Math.round(winsThisWeek.reduce((s, r) => s + r.gt, 0)),
 
-      // Wins this month
       winsThisMonth,
       winsThisMonthCount: winsThisMonth.length,
       winsThisMonthValue: Math.round(winsThisMonthValue),
       winsLastMonthCount: winsLastMonth.length,
       winsLastMonthValue: Math.round(winsLastMonthValue),
 
-      // Win rate
       winRateL90Count,
       winRateL90Dollar,
       winRateY1Count,
@@ -1349,7 +1263,6 @@ export function usePipelineData(data) {
       winRateByDealer,
       winRateByCohort,
 
-      // Sourcing
       newPMsThisMonth,
       newPMsThisMonthCount: newPMsThisMonth.length,
       newPMsY2YTD,
@@ -1357,36 +1270,39 @@ export function usePipelineData(data) {
       newDealersThisQCount: newDealersThisQ.length,
       newDealersY2YTD,
 
-      // Pace
-      quotesThisMonthCount,
-      quotesThisMonthValue: Math.round(quotesThisMonthValue),
-      trailingMo3Count: Math.round(trailingMo3Count),
-      trailingMo3Value: Math.round(trailingMo3Value),
-      allTimeBestCount,
-      allTimeBestValue: Math.round(allTimeBestValue),
-      projectedMonthEndCount,
-      projectedMonthEndValue,
+      // Pace — defaults to XL-excluded, with alternates for toggle
+      quotesThisMonthCount: thisMonthNoXL.count,
+      quotesThisMonthValue: Math.round(thisMonthNoXL.value),
+      quotesThisMonthCountWithXL: thisMonthWithXL.count,
+      quotesThisMonthValueWithXL: Math.round(thisMonthWithXL.value),
+      trailingMo3Count: Math.round(trailingMo3CountNoXL),
+      trailingMo3Value: Math.round(trailingMo3ValueNoXL),
+      trailingMo3CountWithXL: Math.round(trailingMo3CountWithXL),
+      trailingMo3ValueWithXL: Math.round(trailingMo3ValueWithXL),
+      allTimeBestCount: bestNoXL.count,
+      allTimeBestValue: Math.round(bestNoXL.value),
+      allTimeBestCountWithXL: bestWithXL.count,
+      allTimeBestValueWithXL: Math.round(bestWithXL.value),
+      projectedMonthEndCount: projectedMonthEndCountNoXL,
+      projectedMonthEndValue: projectedMonthEndValueNoXL,
+      projectedMonthEndCountWithXL,
+      projectedMonthEndValueWithXL,
       monthProgress,
 
-      // Moonshots
       moonshots,
       moonshotsCount: moonshots.length,
       moonshotsFace: Math.round(moonshots.reduce((s, r) => s + r.gt, 0)),
 
-      // PM review queue
       reviewQueue,
       reviewQueueCount: reviewQueue.length,
       reviewQueueValue: Math.round(reviewQueue.reduce((s, r) => s + r.openValue, 0)),
 
-      // Recently expired
       recentlyExpired,
 
-      // Large open jobs
       largeOpenJobs,
       largeOpenJobsCount: largeOpenJobs.length,
       largeOpenJobsFace: Math.round(largeOpenJobs.reduce((s, r) => s + r.gt, 0)),
 
-      // PM metadata (for the review modal)
       pmMedians,
       overallMedian,
       reviewLog,
@@ -1394,7 +1310,7 @@ export function usePipelineData(data) {
   }, [data]);
 }
 
-
+// ── JOBS IN FLIGHT ───────────────────────────────────────────
 export function useJobsInFlightData(data) {
   return useMemo(() => {
     if (!data) return null;
@@ -1433,6 +1349,7 @@ export function useJobsInFlightData(data) {
   }, [data]);
 }
 
+// ── DEALER RELATIONSHIPS ─────────────────────────────────────
 export function useDealerData(data) {
   return useMemo(() => {
     if (!data) return null;
@@ -1501,6 +1418,7 @@ export function useDealerData(data) {
   }, [data]);
 }
 
+// ── INSTALL NET ──────────────────────────────────────────────
 export function useInetData(data) {
   return useMemo(() => {
     if (!data) return null;
@@ -1569,12 +1487,12 @@ export function useInetData(data) {
   }, [data]);
 }
 
+// ── RELATIONSHIPS ────────────────────────────────────────────
 export function useRelationshipData(data) {
   return useMemo(() => {
     if (!data) return null;
     const { contacts, prospects, orders } = data;
 
-    // Build relationship status from order activity
     const postOrders = orders.filter(r => r.yearBucket==='Year 1'||r.yearBucket==='Year 2');
     const lastQuoteByCompany = {};
     const postCountByCompany = {};

@@ -29,6 +29,7 @@ export default function Pipeline({ data }) {
   const [winRateDrill, setWinRateDrill] = useState(null); // 'pm' | 'dealer' | 'cohort'
   const [orderDetail, setOrderDetail] = useState(null);
   const [drill, setDrill] = useState(null); // generic list drill-down
+  const [includeXL, setIncludeXL] = useState(false); // pace bars: exclude XL by default
 
   if (!d) return null;
 
@@ -56,26 +57,37 @@ export default function Pipeline({ data }) {
         </div>
       </div>
 
-      {/* WINS TICKER */}
+      {/* WINS TICKER — clickable to see all wins this week */}
       {d.winsThisWeekCount > 0 && (
-        <div style={{
-          background: '#EAF3DE', border: '0.5px solid #C0DD97', borderRadius: 12,
-          padding: '10px 14px', marginBottom: 14,
-          display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
-        }}>
+        <div
+          onClick={() => setDrill({
+            title: `Won this week (${d.winsThisWeekCount} · ${fmtCurrency(d.winsThisWeekValue)})`,
+            type: 'wins',
+            items: d.winsThisWeek,
+          })}
+          style={{
+            background: '#EAF3DE', border: '0.5px solid #C0DD97', borderRadius: 12,
+            padding: '10px 14px', marginBottom: 14,
+            display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
+            cursor: 'pointer', transition: 'background 0.1s',
+          }}
+          onMouseEnter={e => e.currentTarget.style.background = '#DFEFC8'}
+          onMouseLeave={e => e.currentTarget.style.background = '#EAF3DE'}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#27500A', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>
             Won this week
           </div>
           <div style={{ fontSize: 13, color: '#173404' }}>
             <span style={{ fontWeight: 600 }}>{d.winsThisWeekCount} {d.winsThisWeekCount === 1 ? 'job' : 'jobs'} · {fmtCurrency(d.winsThisWeekValue)}</span>
-            {d.winsThisWeek.slice(0, 3).map((w, i) => (
+            {d.winsThisWeek.slice(0, 3).map((w) => (
               <React.Fragment key={w.order_number}>
                 <span style={{ color: '#3B6D11', margin: '0 8px' }}>·</span>
                 {(w.order_name || w.customer).slice(0, 30)} {fmtCurrency(w.gt)}
               </React.Fragment>
             ))}
             {d.winsThisWeek.length > 3 && (
-              <span style={{ color: '#3B6D11', marginLeft: 8 }}>+ {d.winsThisWeek.length - 3} more</span>
+              <span style={{ color: '#3B6D11', marginLeft: 8, textDecoration: 'underline' }}>
+                + {d.winsThisWeek.length - 3} more ↗
+              </span>
             )}
           </div>
         </div>
@@ -138,16 +150,27 @@ export default function Pipeline({ data }) {
 
       {/* BLOCK 2: PACE BARS */}
       <div style={{ background: '#fff', border: `0.5px solid ${C.border}`, borderRadius: 12, padding: '14px 18px 18px', marginBottom: 14 }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 14 }}>
-          Quote pace · through day {d.dayOfMonth} of {d.daysInMonth}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '.05em' }}>
+            Quote pace · through day {d.dayOfMonth} of {d.daysInMonth}
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: C.textSub, cursor: 'pointer', userSelect: 'none' }}>
+            <input
+              type="checkbox"
+              checked={includeXL}
+              onChange={e => setIncludeXL(e.target.checked)}
+              style={{ cursor: 'pointer', margin: 0 }}
+            />
+            Include XL ($50K+) quotes
+          </label>
         </div>
 
         <PaceBar
           label="Quotes sent"
-          current={d.quotesThisMonthCount}
-          projection={d.projectedMonthEndCount}
-          target={d.trailingMo3Count}
-          best={d.allTimeBestCount}
+          current={includeXL ? d.quotesThisMonthCountWithXL : d.quotesThisMonthCount}
+          projection={includeXL ? d.projectedMonthEndCountWithXL : d.projectedMonthEndCount}
+          target={includeXL ? d.trailingMo3CountWithXL : d.trailingMo3Count}
+          best={includeXL ? d.allTimeBestCountWithXL : d.allTimeBestCount}
           monthProgress={d.monthProgress}
           isValue={false}
         />
@@ -156,13 +179,19 @@ export default function Pipeline({ data }) {
 
         <PaceBar
           label="Quote value"
-          current={d.quotesThisMonthValue}
-          projection={d.projectedMonthEndValue}
-          target={d.trailingMo3Value}
-          best={d.allTimeBestValue}
+          current={includeXL ? d.quotesThisMonthValueWithXL : d.quotesThisMonthValue}
+          projection={includeXL ? d.projectedMonthEndValueWithXL : d.projectedMonthEndValue}
+          target={includeXL ? d.trailingMo3ValueWithXL : d.trailingMo3Value}
+          best={includeXL ? d.allTimeBestValueWithXL : d.allTimeBestValue}
           monthProgress={d.monthProgress}
           isValue={true}
         />
+
+        <div style={{ fontSize: 10, color: C.textMuted, marginTop: 14, fontStyle: 'italic' }}>
+          {includeXL
+            ? 'Including XL ($50K+) quotes. Baselines and best month shift when XL deals land.'
+            : 'XL ($50K+) quotes excluded for consistent pace comparison. See Moonshots below.'}
+        </div>
       </div>
 
       {/* BLOCK 3: MOONSHOTS (all shown, no truncation) */}
@@ -318,7 +347,7 @@ export default function Pipeline({ data }) {
 
       {winRateDrill && (
         <Modal wide title="Win rate · L90d breakdown" onClose={() => setWinRateDrill(null)}>
-          <WinRateDrill data={d} initialView={winRateDrill} formatPM={formatPM} />
+          <WinRateDrill data={d} initialView={winRateDrill} formatPM={formatPM} onOrderClick={setOrderDetail} />
         </Modal>
       )}
 
@@ -777,8 +806,10 @@ function PMReviewModal({ entry, data, formatPM, pmMedian, onClose }) {
 }
 
 // Win rate drill-down — tabbed view by PM / dealer / cohort
-function WinRateDrill({ data, initialView, formatPM }) {
+// Clicking a PM or dealer row opens a second-level drill showing their actual decided quotes (green=won, red=lost)
+function WinRateDrill({ data, initialView, formatPM, onOrderClick }) {
   const [view, setView] = useState(initialView);
+  const [selectedRow, setSelectedRow] = useState(null); // { type: 'pm'|'dealer', label, orders }
 
   const tabStyle = (active) => ({
     padding: '6px 14px', fontSize: 12, fontWeight: 600,
@@ -788,10 +819,48 @@ function WinRateDrill({ data, initialView, formatPM }) {
     borderRadius: 4, cursor: 'pointer', marginRight: 6,
   });
 
+  // Second-level drill: the selected PM's or dealer's actual decided quotes
+  if (selectedRow) {
+    return (
+      <div>
+        <button
+          onClick={() => setSelectedRow(null)}
+          style={{ fontSize: 12, padding: '4px 10px', background: 'transparent', border: `0.5px solid ${C.border}`, borderRadius: 4, color: C.textSub, cursor: 'pointer', marginBottom: 12 }}>
+          ← Back to {selectedRow.type === 'pm' ? 'PMs' : 'Dealers'}
+        </button>
+        <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 4 }}>
+          {selectedRow.type === 'pm' ? formatPM(selectedRow.label) : selectedRow.label}
+        </div>
+        <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 14 }}>
+          {selectedRow.orders.filter(o => o.isWon).length} won · {selectedRow.orders.filter(o => !o.isWon).length} lost · last 90 days · click a row for order detail
+        </div>
+        <Table
+          cols={[
+            { key: 'order_number', label: '#', width: '9%', render: v => <span style={{ color: C.textMuted }}>#{v}</span> },
+            { key: 'order_name', label: 'Order name', width: '27%', render: v => v || '—' },
+            { key: selectedRow.type === 'pm' ? 'customer' : 'pm',
+              label: selectedRow.type === 'pm' ? 'Dealer' : 'PM',
+              width: '22%',
+              render: v => selectedRow.type === 'pm' ? v : formatPM(v) },
+            { key: 'gt', label: 'Face', width: '12%', render: v => fmtCurrency(v) },
+            { key: 'cohort', label: 'Cohort', width: '12%', render: v => v ? v.split(' ')[0] : '—' },
+            { key: 'isWon', label: 'Outcome', width: '18%',
+              render: (v) => v
+                ? <Badge type="green">won</Badge>
+                : <Badge type="red">lost</Badge> },
+          ]}
+          rows={selectedRow.orders}
+          onRowClick={onOrderClick}
+          defaultSort={{ key: 'gt', dir: 'desc' }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div>
       <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 14 }}>
-        Last 90 days · {data.winRateDecidedL90} decided quotes · {data.winRateWonL90} won ({Math.round(data.winRateL90Count * 100)}% count / {Math.round(data.winRateL90Dollar * 100)}% dollar)
+        Last 90 days · {data.winRateDecidedL90} decided formal quotes · {data.winRateWonL90} won ({Math.round(data.winRateL90Count * 100)}% count / {Math.round(data.winRateL90Dollar * 100)}% dollar) · T&amp;M orders excluded
       </div>
       <div style={{ display: 'flex', marginBottom: 14 }}>
         <button style={tabStyle(view === 'pm')} onClick={() => setView('pm')}>By PM</button>
@@ -810,6 +879,7 @@ function WinRateDrill({ data, initialView, formatPM }) {
           ]}
           rows={data.winRateByPM}
           defaultSort={{ key: 'decided', dir: 'desc' }}
+          onRowClick={(row) => setSelectedRow({ type: 'pm', label: row.pm, orders: row.orders })}
         />
       )}
 
@@ -824,6 +894,7 @@ function WinRateDrill({ data, initialView, formatPM }) {
           ]}
           rows={data.winRateByDealer}
           defaultSort={{ key: 'decided', dir: 'desc' }}
+          onRowClick={(row) => setSelectedRow({ type: 'dealer', label: row.customer, orders: row.orders })}
         />
       )}
 
@@ -860,12 +931,15 @@ function DrillTable({ drill, onOrderClick, formatPM }) {
     switch (type) {
       case 'wins':
         return [
-          { key: 'order_number', label: '#', width: '10%', render: v => <span style={{ color: C.textMuted }}>#{v}</span> },
-          { key: 'order_name', label: 'Order name', width: '28%', render: v => v || '—' },
-          { key: 'customer', label: 'Dealer', width: '20%' },
-          { key: 'pm', label: 'PM', width: '18%', render: v => formatPM(v) },
-          { key: 'status', label: 'Status', width: '14%' },
-          { key: 'gt', label: 'Value', width: '10%', render: v => fmtCurrency(v) },
+          { key: 'order_number', label: '#', width: '9%', render: v => <span style={{ color: C.textMuted }}>#{v}</span> },
+          { key: 'order_name', label: 'Order name', width: '26%', render: v => v || '—' },
+          { key: 'customer', label: 'Dealer', width: '18%' },
+          { key: 'pm', label: 'PM', width: '16%', render: v => formatPM(v) },
+          { key: 'isInet', label: 'Channel', width: '11%',
+            render: v => v ? <Badge type="purple">INET</Badge> : <Badge type="blue">Non-INET</Badge> },
+          { key: 'gt', label: 'Value', width: '11%', render: v => fmtCurrency(v) },
+          { key: 'wonDate', label: 'Won', width: '9%',
+            render: v => v ? new Date(v).toISOString().slice(5, 10) : '—' },
         ];
       case 'newPMs':
         return [
