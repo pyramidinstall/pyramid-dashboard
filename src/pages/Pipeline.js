@@ -629,8 +629,8 @@ function PMReviewModal({ entry, data, formatPM, pmMedian, onClose }) {
     .sort((a, b) => b.wonDate - a.wonDate)
     .slice(0, 5);
 
-  // Decided count for win rate
-  const decided = pmOrders.filter(r => r.isDecided);
+  // Decided count for win rate — formal quotes only (exclude T&M, matches main win rate logic)
+  const decided = pmOrders.filter(r => r.isDecided && !!r.lqp_start_date);
   const won = decided.filter(r => r.isWon);
   const winRate = decided.length >= 5 ? won.length / decided.length : null;
 
@@ -667,8 +667,13 @@ function PMReviewModal({ entry, data, formatPM, pmMedian, onClose }) {
         <div style={{ background: '#f0f2f5', borderRadius: 6, padding: '8px 10px' }}>
           <div style={{ fontSize: 10, color: C.textMuted, textTransform: 'uppercase', fontWeight: 600 }}>Open</div>
           <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginTop: 2 }}>
-            {entry.openCount} · {fmtCurrency(entry.openValue)}
+            {openQuotes.length} · {fmtCurrency(openQuotes.reduce((s, r) => s + r.gt, 0))}
           </div>
+          {entry.openCount > 0 && entry.openCount < openQuotes.length && (
+            <div style={{ fontSize: 9, color: C.textMuted, marginTop: 1 }}>
+              {entry.openCount} L+ · {fmtCurrency(entry.openValue)}
+            </div>
+          )}
         </div>
         <div style={{ background: '#f0f2f5', borderRadius: 6, padding: '8px 10px' }}>
           <div style={{ fontSize: 10, color: C.textMuted, textTransform: 'uppercase', fontWeight: 600 }}>Decided</div>
