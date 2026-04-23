@@ -14,8 +14,8 @@ import { fmtCurrency, fmtPct } from '../utils/sheets';
 //      The URL contains entry.XXXXXXXX=TEST — copy the number
 //   4. Paste both below
 // ─────────────────────────────────────────────────────────────────────────
-const PM_REVIEW_FORM_BASE = ''; // e.g. 'https://docs.google.com/forms/d/e/FORM_ID/viewform'
-const PM_REVIEW_FORM_PM_FIELD = ''; // e.g. 'entry.123456789'
+const PM_REVIEW_FORM_BASE = 'https://docs.google.com/forms/d/e/1FAIpQLSdVgBDGqcY1sQLYdHfNl2GL55IBPRHEveoyPg08K50tRnT-yw/viewform';
+const PM_REVIEW_FORM_PM_FIELD = 'entry.908849972';
 
 function pmReviewFormUrl(pmName) {
   if (!PM_REVIEW_FORM_BASE) return null;
