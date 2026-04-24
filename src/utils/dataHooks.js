@@ -1314,37 +1314,240 @@ export function usePipelineData(data) {
 export function useJobsInFlightData(data) {
   return useMemo(() => {
     if (!data) return null;
-    const { orders } = data;
+    const { orders, invoices } = data;
 
-    const readyToInvoice = orders.filter(r => r.status === 'Ready to Invoice')
-      .map(r => ({ ...r, value: r.remaining || r.gt,
-        flag: (r.daysInStatus||0) > 30 ? 'exclude' : (r.daysInStatus||0) > 7 ? 'overdue' : 'ok' }))
-      .sort((a,b) => (b.daysInStatus||0) - (a.daysInStatus||0));
+    // ── HELPERS ──────────────────────────────────────────────
+    const pctInvoiced = (r) => {
+      if (!r.gt || r.gt <= 0) return 0;
+      const inv = parseNum(r.dollars_invoiced);
+      return Math.min(1, inv / r.gt);
+    };
 
-    const inProgress = orders.filter(r =>
-      (r.status==='In-Progress'||r.status==='In-Progress - Phase Break') && !r.isSkyline)
-      .map(r => ({ ...r, value: r.remaining || r.gt }))
-      .sort((a,b) => (b.daysInStatus||0) - (a.daysInStatus||0));
+    // ── BASE LISTS (before cleanup split) ────────────────────
+    const allRTI = orders.filter(r => r.status === 'Ready to Invoice');
+    const allInProgress = orders.filter(r =>
+      (r.status === 'In-Progress' || r.status === 'In-Progress - Phase Break') && !r.isSkyline);
+    const allApproved = orders.filter(r => r.status === 'Approved Order' && !r.isSkyline);
 
-    const approved = orders.filter(r => r.status==='Approved Order' && !r.isSkyline)
-      .map(r => ({ ...r, value: r.remaining || r.gt }))
-      .sort((a,b) => (b.daysInStatus||0) - (a.daysInStatus||0));
+    // ── CLEANUP CLASSIFIER ───────────────────────────────────
+    // Returns a flag object {reason, severity} if the order looks suspicious, else null.
+    // "severity" drives sort order. "verify" means "go check in IQ / ask Linda".
+    const classify = (r) => {
+      const pct = pctInvoiced(r);
+      const dis = r.daysInStatus || 0;
 
-    const validRTI = readyToInvoice.filter(r => r.flag !== 'exclude');
-    const rtiTotal = validRTI.reduce((s,r) => s+r.value, 0);
+      // Zero-value entries — Linda edge case or INET shell
+      if (r.gt === 0 || r.gt === null) {
+        return {
+          severity: 'high',
+          reason: r.isInet
+            ? 'INET order with $0 value — verify with Linda'
+            : '$0 value — check IQ and confirm with Linda',
+        };
+      }
+
+      // Fully invoiced orders still in a pre-invoiced status
+      if (pct >= 0.98 && r.status !== 'Ready to Invoice') {
+        return {
+          severity: 'high',
+          reason: `${Math.round(pct * 100)}% invoiced · status hasn't closed in IQ`,
+        };
+      }
+
+      // In-Progress with nothing left to invoice
+      if (r.status.startsWith('In-Progress') && r.remaining !== null && r.remaining <= 0) {
+        return {
+          severity: 'high',
+          reason: 'No remaining value · likely complete but status open',
+        };
+      }
+
+      // Approved aging very long — almost certainly dead or moved outside IQ
+      if (r.status === 'Approved Order' && dis > 180) {
+        return {
+          severity: dis > 270 ? 'high' : 'med',
+          reason: `Approved ${dis}d ago · unusually long — verify still active`,
+        };
+      }
+
+      // In-Progress aging well beyond norm
+      if (r.status.startsWith('In-Progress') && dis > 180) {
+        return {
+          severity: dis > 270 ? 'high' : 'med',
+          reason: `In-progress ${dis}d · exceeds typical install duration`,
+        };
+      }
+
+      // Missing PM on any in-flight order — data hygiene
+      if (!r.pm || String(r.pm).trim() === '') {
+        return {
+          severity: 'low',
+          reason: 'Missing PM · fix in IQ',
+        };
+      }
+
+      return null;
+    };
+
+    // Walk all three buckets and classify
+    const allInFlight = [...allRTI, ...allInProgress, ...allApproved];
+    const cleanupQueue = [];
+    const cleanIds = new Set();
+
+    allInFlight.forEach(r => {
+      const flag = classify(r);
+      if (flag) {
+        cleanupQueue.push({
+          ...r,
+          value: r.remaining || r.gt || 0,
+          pctInvoiced: pctInvoiced(r),
+          cleanupReason: flag.reason,
+          cleanupSeverity: flag.severity,
+          // Pick the most relevant date for context
+          relevantDate: r.status === 'Approved Order' ? r.approved_start_date
+                     : r.status.startsWith('In-Progress') ? r.inprog_start_date
+                     : r.invoiced_date || r.inprog_start_date || r.approved_start_date || r.created_date,
+        });
+      } else {
+        cleanIds.add(r.order_number);
+      }
+    });
+
+    // Sort cleanup queue: high severity first, then by value desc
+    const sevRank = { high: 0, med: 1, low: 2 };
+    cleanupQueue.sort((a, b) => {
+      const s = sevRank[a.cleanupSeverity] - sevRank[b.cleanupSeverity];
+      if (s !== 0) return s;
+      return (b.value || 0) - (a.value || 0);
+    });
+
+    // ── CLEAN LISTS (zombies removed) ────────────────────────
+    const readyToInvoice = allRTI
+      .filter(r => cleanIds.has(r.order_number))
+      .map(r => ({
+        ...r,
+        value: r.remaining || r.gt,
+        pctInvoiced: pctInvoiced(r),
+      }))
+      // Sort by order number descending as a rough "recently moved to RTI" proxy
+      // (until we have a real RTI transition date in the data)
+      .sort((a, b) => (b.order_number || '').localeCompare(a.order_number || ''));
+
+    const inProgress = allInProgress
+      .filter(r => cleanIds.has(r.order_number))
+      .map(r => ({
+        ...r,
+        value: r.remaining || r.gt,
+        pctInvoiced: pctInvoiced(r),
+      }))
+      .sort((a, b) => (a.daysInStatus || 0) - (b.daysInStatus || 0)); // fresh first (closer to completion expectation)
+
+    const approved = allApproved
+      .filter(r => cleanIds.has(r.order_number))
+      .map(r => ({
+        ...r,
+        value: r.remaining || r.gt,
+        pctInvoiced: pctInvoiced(r),
+      }))
+      .sort((a, b) => (a.daysInStatus || 0) - (b.daysInStatus || 0));
+
+    // Merged "active work" list for unified table
+    const activeWork = [...inProgress, ...approved];
+
+    // ── STAT STRIP NUMBERS ───────────────────────────────────
+    // Likely revenue: weighted $ of clean jobs only
+    const likelyRevenue = Math.round(
+      readyToInvoice.reduce((s, r) => s + (r.value || 0), 0) * 0.95 +
+      inProgress.reduce((s, r) => s + (r.backlogWeighted || 0), 0) +
+      approved.reduce((s, r) => s + (r.backlogWeighted || 0), 0)
+    );
+
+    const cleanupCount = cleanupQueue.length;
+    const cleanupFace = Math.round(cleanupQueue.reduce((s, r) => s + (r.value || 0), 0));
+
+    const rtiCount = readyToInvoice.length;
+    const rtiFace = Math.round(readyToInvoice.reduce((s, r) => s + (r.value || 0), 0));
+
+    // ── SKYLINE TREND (last 6 months invoiced) ───────────────
+    // Pull invoiced dollars for Skyline from the invoices tab
+    const skylineInvoices = (invoices || []).filter(r =>
+      r.customer && String(r.customer).toUpperCase().includes('SKYLINE'));
+    const skylineByMonth = {};
+    skylineInvoices.forEach(r => {
+      const d = r.payment_date || r.invoiced_date;
+      if (!d) return;
+      const date = new Date(d);
+      if (isNaN(date)) return;
+      const mkey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      skylineByMonth[mkey] = (skylineByMonth[mkey] || 0) + r.gt;
+    });
+
+    // Build last 6 complete months (not including current)
+    const skylineSeries = [];
+    const refDate = new Date(TODAY);
+    for (let i = 6; i >= 1; i--) {
+      const d = new Date(refDate.getFullYear(), refDate.getMonth() - i, 1);
+      const mkey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const label = d.toLocaleString('default', { month: 'short' });
+      skylineSeries.push({
+        month: mkey,
+        label,
+        value: Math.round(skylineByMonth[mkey] || 0),
+      });
+    }
+
+    // Compute rough trend (last 3 mo avg vs prior 3 mo avg)
+    const last3 = skylineSeries.slice(3).reduce((s, p) => s + p.value, 0) / 3;
+    const prior3 = skylineSeries.slice(0, 3).reduce((s, p) => s + p.value, 0) / 3;
+    const skylineLast3Avg = Math.round(last3);
+    const skylineTrend = prior3 > 0
+      ? (last3 - prior3) / prior3
+      : 0;
+    // "Declining" if last 3mo avg <70% of prior 3mo avg
+    const skylineDeclining = skylineTrend < -0.3;
+    // Recent month for "current rate"
+    const skylineLastMonth = skylineSeries[skylineSeries.length - 1]?.value || 0;
+
+    // ── BACKWARD COMPAT (for overview page forecast) ─────────
+    const validRTI = readyToInvoice;
+    const rtiTotal = validRTI.reduce((s, r) => s + r.value, 0);
 
     return {
+      // New cleanup section
+      cleanupQueue,
+      cleanupCount,
+      cleanupFace,
+
+      // Stat strip
+      likelyRevenue,
+      rtiCount,
+      rtiFace,
+
+      // Clean tables
       readyToInvoice,
-      rtiTotal: Math.round(rtiTotal), rtiWeighted: Math.round(rtiTotal * 0.95),
       inProgress,
-      ipTotal: Math.round(inProgress.reduce((s,r)=>s+r.value,0)),
-      ipWeighted: Math.round(inProgress.reduce((s,r)=>s+(r.backlogWeighted||0),0)),
       approved,
-      apTotal: Math.round(approved.reduce((s,r)=>s+r.value,0)),
-      apWeighted: Math.round(approved.reduce((s,r)=>s+(r.backlogWeighted||0),0)),
-      checkinAlerts: [...approved,...inProgress]
-        .filter(r => ['Check in','Follow up'].includes(r.backlogTier))
-        .sort((a,b) => (b.daysInStatus||0) - (a.daysInStatus||0)),
+      activeWork,
+
+      // Totals (clean-only)
+      rtiTotal: Math.round(rtiTotal),
+      rtiWeighted: Math.round(rtiTotal * 0.95),
+      ipTotal: Math.round(inProgress.reduce((s, r) => s + r.value, 0)),
+      ipWeighted: Math.round(inProgress.reduce((s, r) => s + (r.backlogWeighted || 0), 0)),
+      apTotal: Math.round(approved.reduce((s, r) => s + r.value, 0)),
+      apWeighted: Math.round(approved.reduce((s, r) => s + (r.backlogWeighted || 0), 0)),
+
+      // Skyline real data
+      skylineSeries,
+      skylineLast3Avg,
+      skylineLastMonth,
+      skylineDeclining,
+      skylineTrend,
+
+      // Kept for compat
+      checkinAlerts: [...approved, ...inProgress]
+        .filter(r => ['Check in', 'Follow up'].includes(r.backlogTier))
+        .sort((a, b) => (b.daysInStatus || 0) - (a.daysInStatus || 0)),
     };
   }, [data]);
 }
