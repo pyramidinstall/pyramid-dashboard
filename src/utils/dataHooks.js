@@ -1330,79 +1330,158 @@ export function useJobsInFlightData(data) {
     const allApproved = orders.filter(r => r.status === 'Approved Order' && !r.isSkyline);
 
     // ── CLEANUP CLASSIFIER ───────────────────────────────────
-    // Returns a flag object {reason, severity} if the order looks suspicious, else null.
-    // "severity" drives sort order. "verify" means "go check in IQ / ask Linda".
+    // Returns an array of {reason, severity} for every issue found, or [] if clean.
+    // One order can have multiple issues (e.g., aged AND missing PO) — we want all visible.
     const classify = (r) => {
+      const flags = [];
       const pct = pctInvoiced(r);
       const dis = r.daysInStatus || 0;
 
       // Zero-value entries — Linda edge case or INET shell
       if (r.gt === 0 || r.gt === null) {
-        return {
+        flags.push({
           severity: 'high',
           reason: r.isInet
             ? 'INET order with $0 value — verify with Linda'
             : '$0 value — check IQ and confirm with Linda',
-        };
+        });
       }
 
       // Fully invoiced orders still in a pre-invoiced status
       if (pct >= 0.98 && r.status !== 'Ready to Invoice') {
-        return {
+        flags.push({
           severity: 'high',
           reason: `${Math.round(pct * 100)}% invoiced · status hasn't closed in IQ`,
-        };
+        });
       }
 
       // In-Progress with nothing left to invoice
-      if (r.status.startsWith('In-Progress') && r.remaining !== null && r.remaining <= 0) {
-        return {
+      if (r.status.startsWith('In-Progress') && r.remaining !== null && r.remaining <= 0 && r.gt > 0) {
+        flags.push({
           severity: 'high',
           reason: 'No remaining value · likely complete but status open',
-        };
+        });
       }
 
       // Approved aging very long — almost certainly dead or moved outside IQ
       if (r.status === 'Approved Order' && dis > 180) {
-        return {
+        flags.push({
           severity: dis > 270 ? 'high' : 'med',
           reason: `Approved ${dis}d ago · unusually long — verify still active`,
-        };
+        });
       }
 
       // In-Progress aging well beyond norm
       if (r.status.startsWith('In-Progress') && dis > 180) {
-        return {
+        flags.push({
           severity: dis > 270 ? 'high' : 'med',
           reason: `In-progress ${dis}d · exceeds typical install duration`,
-        };
+        });
+      }
+
+      // ── PO / AUTHORIZATION CHECKS ──────────────────────────
+      // Only applies to non-Skyline, non-INET orders (INET has its own workflow)
+      const applyPOChecks = !r.isSkyline && !r.isInet && r.gt > 0;
+      if (applyPOChecks) {
+        const po = String(r.po_number || '').trim();
+        const poAmt = parseNum(r.po_amount);
+        const auth = String(r.auth_method || '').trim();
+        const authLower = auth.toLowerCase();
+        const hasPO = po.length > 0;
+        const hasAuth = auth.length > 0;
+
+        // Known auth method types
+        const isCustomerPO = authLower === 'customer po';
+        const isNeedsPO = authLower === 'needs po';
+        const isEmailApproval = authLower === 'email approval';
+        const isSignedQuote = authLower === 'signed quote';
+        const isVerbal = authLower.includes('verbal');
+        // Methods that legitimately don't need a PO
+        const poNotRequired = isEmailApproval || isSignedQuote;
+
+        // CASE 1: No auth method recorded at all — Linda didn't fill in IQ
+        if (!hasAuth) {
+          flags.push({
+            severity: 'high',
+            reason: 'No authorization method in IQ — Linda needs to update',
+          });
+        }
+        // CASE 2: "Needs PO" — explicitly flagged as still waiting for a PO.
+        // This is the chase list: Linda knows work started, still needs a PO.
+        else if (isNeedsPO) {
+          flags.push({
+            severity: 'high',
+            reason: 'Marked "Needs PO" · chase PO from client',
+          });
+        }
+        // CASE 3: Auth says PO expected but no PO# recorded
+        else if (isCustomerPO && !hasPO) {
+          flags.push({
+            severity: 'high',
+            reason: 'Auth method is "Customer PO" but no PO# recorded — Linda needs to update',
+          });
+        }
+        // CASE 4: PO# recorded but amount missing
+        else if (hasPO && (poAmt === 0 || !r.po_amount)) {
+          flags.push({
+            severity: 'high',
+            reason: 'PO# entered without amount — Linda needs to update IQ',
+          });
+        }
+        // CASE 5: PO amount doesn't match grand total — medium severity
+        // PO should equal full job value; progress billing applies to invoices, not POs
+        else if (hasPO && poAmt > 0 && Math.abs(poAmt - r.gt) > 0.5) {
+          flags.push({
+            severity: 'med',
+            reason: `PO amount ${fmtForFlag(poAmt)} ≠ job ${fmtForFlag(r.gt)} — verify`,
+          });
+        }
+        // CASE 6: Verbal approval without PO — chase PO
+        else if (!hasPO && isVerbal) {
+          flags.push({
+            severity: 'low',
+            reason: 'Verbal approval · chase PO from client',
+          });
+        }
       }
 
       // Missing PM on any in-flight order — data hygiene
       if (!r.pm || String(r.pm).trim() === '') {
-        return {
+        flags.push({
           severity: 'low',
           reason: 'Missing PM · fix in IQ',
-        };
+        });
       }
 
-      return null;
+      return flags;
     };
+
+    // Helper for PO flag dollar formatting (compact)
+    function fmtForFlag(n) {
+      if (n >= 1000) return '$' + Math.round(n / 1000) + 'K';
+      return '$' + Math.round(n);
+    }
 
     // Walk all three buckets and classify
     const allInFlight = [...allRTI, ...allInProgress, ...allApproved];
     const cleanupQueue = [];
     const cleanIds = new Set();
 
+    const sevRank = { high: 0, med: 1, low: 2 };
+
     allInFlight.forEach(r => {
-      const flag = classify(r);
-      if (flag) {
+      const flags = classify(r);
+      if (flags.length > 0) {
+        // Pick the most severe flag for sort purposes; keep all for display
+        flags.sort((a, b) => sevRank[a.severity] - sevRank[b.severity]);
+        const top = flags[0];
         cleanupQueue.push({
           ...r,
           value: r.remaining || r.gt || 0,
           pctInvoiced: pctInvoiced(r),
-          cleanupReason: flag.reason,
-          cleanupSeverity: flag.severity,
+          cleanupReason: flags.map(f => f.reason).join(' · '),
+          cleanupReasons: flags, // full array for modal
+          cleanupSeverity: top.severity,
           // Pick the most relevant date for context
           relevantDate: r.status === 'Approved Order' ? r.approved_start_date
                      : r.status.startsWith('In-Progress') ? r.inprog_start_date
@@ -1414,7 +1493,6 @@ export function useJobsInFlightData(data) {
     });
 
     // Sort cleanup queue: high severity first, then by value desc
-    const sevRank = { high: 0, med: 1, low: 2 };
     cleanupQueue.sort((a, b) => {
       const s = sevRank[a.cleanupSeverity] - sevRank[b.cleanupSeverity];
       if (s !== 0) return s;
