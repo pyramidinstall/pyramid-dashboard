@@ -647,20 +647,58 @@ function PMReviewModal({ entry, data, formatPM, pmMedian, onClose }) {
 
   return (
     <Modal wide title={`${formatPM(pm)} · ${entry.dealer}`} onClose={onClose}>
-      {/* Meta row */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14, fontSize: 12, color: C.textSub }}>
-        <div>
-          {decided.length} decided quotes{winRate !== null && ` · ${Math.round(winRate * 100)}% win rate`} · typical decision window {pmMedian}d
-        </div>
-        <div style={{ textAlign: 'right', fontSize: 11 }}>
-          <div style={{ color: C.textMuted }}>Last reviewed</div>
-          <div style={{ color: C.text, fontWeight: 600 }}>
-            {entry.lastReviewDate
-              ? `${entry.lastReviewDate} · ${entry.daysSinceReview}d ago`
-              : 'never'}
+      {/* Print stylesheet — hides everything outside the modal during print */}
+      <style>{`
+        @media print {
+          @page { margin: 0.5in; }
+          body * { visibility: hidden !important; }
+          /* Show only modal contents */
+          [data-pyr-modal-content], [data-pyr-modal-content] * { visibility: visible !important; }
+          [data-pyr-modal-content] {
+            position: absolute !important;
+            left: 0 !important; top: 0 !important;
+            width: 100% !important; max-width: 100% !important;
+            max-height: none !important; overflow: visible !important;
+            box-shadow: none !important; padding: 0 !important;
+            background: #fff !important;
+          }
+          /* Hide the modal's overlay backdrop and close button */
+          [data-pyr-modal-overlay] { background: #fff !important; position: static !important; }
+          .pyr-no-print { display: none !important; }
+        }
+      `}</style>
+
+      {/* Wrap all modal content so print CSS can target it */}
+      <div data-pyr-modal-content>
+        {/* Meta row */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14, fontSize: 12, color: C.textSub, gap: 12 }}>
+          <div>
+            {decided.length} decided quotes{winRate !== null && ` · ${Math.round(winRate * 100)}% win rate`} · typical decision window {pmMedian}d
+          </div>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+            <button
+              className="pyr-no-print"
+              onClick={() => window.print()}
+              style={{
+                fontSize: 11, fontWeight: 600, padding: '4px 10px',
+                background: '#fff', color: C.textSub,
+                border: `0.5px solid ${C.border}`, borderRadius: 4,
+                cursor: 'pointer', whiteSpace: 'nowrap',
+              }}
+              title="Print this view for a meeting"
+            >
+              Print
+            </button>
+            <div style={{ textAlign: 'right', fontSize: 11 }}>
+              <div style={{ color: C.textMuted }}>Last reviewed</div>
+              <div style={{ color: C.text, fontWeight: 600 }}>
+                {entry.lastReviewDate
+                  ? `${entry.lastReviewDate} · ${entry.daysSinceReview}d ago`
+                  : 'never'}
+              </div>
+            </div>
           </div>
         </div>
-      </div>
 
       {/* Stats strip */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 18 }}>
@@ -702,6 +740,19 @@ function PMReviewModal({ entry, data, formatPM, pmMedian, onClose }) {
             Open quotes · priority order
           </div>
           <div style={{ borderTop: `0.5px solid ${C.border}` }}>
+            <div style={{
+              display: 'grid', gridTemplateColumns: '60px 1.4fr 1fr 70px 60px', gap: 8,
+              padding: '6px 0',
+              borderBottom: `0.5px solid ${C.border}`,
+              fontSize: 10, color: C.textMuted, fontWeight: 600,
+              textTransform: 'uppercase', letterSpacing: '.04em',
+            }}>
+              <span>#</span>
+              <span>Order</span>
+              <span>Status / age</span>
+              <span style={{ textAlign: 'right' }}>Value</span>
+              <span style={{ textAlign: 'right' }}>Expires</span>
+            </div>
             {openQuotes.map((q, i) => (
               <div key={q.order_number} style={{
                 display: 'grid', gridTemplateColumns: '60px 1.4fr 1fr 70px 60px', gap: 8,
@@ -729,6 +780,18 @@ function PMReviewModal({ entry, data, formatPM, pmMedian, onClose }) {
             Recently expired · rescue candidates
           </div>
           <div style={{ borderTop: `0.5px solid ${C.border}` }}>
+            <div style={{
+              display: 'grid', gridTemplateColumns: '60px 1.4fr 1fr 70px', gap: 8,
+              padding: '6px 0',
+              borderBottom: `0.5px solid ${C.border}`,
+              fontSize: 10, color: C.textMuted, fontWeight: 600,
+              textTransform: 'uppercase', letterSpacing: '.04em',
+            }}>
+              <span>#</span>
+              <span>Order</span>
+              <span>Expired</span>
+              <span style={{ textAlign: 'right' }}>Value</span>
+            </div>
             {pmExpired.map((q, i) => (
               <div key={q.order_number} style={{
                 display: 'grid', gridTemplateColumns: '60px 1.4fr 1fr 70px', gap: 8,
@@ -753,6 +816,18 @@ function PMReviewModal({ entry, data, formatPM, pmMedian, onClose }) {
             Recently won · thank them
           </div>
           <div style={{ borderTop: `0.5px solid ${C.border}` }}>
+            <div style={{
+              display: 'grid', gridTemplateColumns: '60px 1.4fr 1fr 70px', gap: 8,
+              padding: '6px 0',
+              borderBottom: `0.5px solid ${C.border}`,
+              fontSize: 10, color: C.textMuted, fontWeight: 600,
+              textTransform: 'uppercase', letterSpacing: '.04em',
+            }}>
+              <span>#</span>
+              <span>Order</span>
+              <span>Won / status</span>
+              <span style={{ textAlign: 'right' }}>Value</span>
+            </div>
             {pmWon.map((q, i) => (
               <div key={q.order_number} style={{
                 display: 'grid', gridTemplateColumns: '60px 1.4fr 1fr 70px', gap: 8,
@@ -783,7 +858,7 @@ function PMReviewModal({ entry, data, formatPM, pmMedian, onClose }) {
       )}
 
       {/* Action buttons */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18, paddingTop: 14, borderTop: `0.5px solid ${C.border}` }}>
+      <div className="pyr-no-print" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18, paddingTop: 14, borderTop: `0.5px solid ${C.border}` }}>
         <button
           onClick={onClose}
           style={{ fontSize: 12, padding: '7px 14px', background: 'transparent', border: `0.5px solid ${C.border}`, borderRadius: 6, color: C.textSub, cursor: 'pointer' }}>
@@ -805,6 +880,7 @@ function PMReviewModal({ entry, data, formatPM, pmMedian, onClose }) {
             Log review ↗ (form not configured)
           </button>
         )}
+      </div>
       </div>
     </Modal>
   );
