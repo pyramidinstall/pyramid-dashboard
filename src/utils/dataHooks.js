@@ -1330,7 +1330,9 @@ export function useJobsInFlightData(data) {
     const allApproved = orders.filter(r => r.status === 'Approved Order' && !r.isSkyline);
 
     // ── CLEANUP CLASSIFIER ───────────────────────────────────
-    // Returns an array of {reason, severity} for every issue found, or [] if clean.
+    // Returns an array of {reason, severity, kind} for every issue found, or [] if clean.
+    // kind: 'zombie' means the order probably isn't real revenue (completed elsewhere, dead, $0 value)
+    //       'hygiene' means the order IS likely real revenue but has data issues to fix
     // One order can have multiple issues (e.g., aged AND missing PO) — we want all visible.
     const classify = (r) => {
       const flags = [];
@@ -1341,6 +1343,7 @@ export function useJobsInFlightData(data) {
       if (r.gt === 0 || r.gt === null) {
         flags.push({
           severity: 'high',
+          kind: 'zombie',
           reason: r.isInet
             ? 'INET order with $0 value — verify with Linda'
             : '$0 value — check IQ and confirm with Linda',
@@ -1351,6 +1354,7 @@ export function useJobsInFlightData(data) {
       if (pct >= 0.98 && r.status !== 'Ready to Invoice') {
         flags.push({
           severity: 'high',
+          kind: 'zombie',
           reason: `${Math.round(pct * 100)}% invoiced · status hasn't closed in IQ`,
         });
       }
@@ -1359,6 +1363,7 @@ export function useJobsInFlightData(data) {
       if (r.status.startsWith('In-Progress') && r.remaining !== null && r.remaining <= 0 && r.gt > 0) {
         flags.push({
           severity: 'high',
+          kind: 'zombie',
           reason: 'No remaining value · likely complete but status open',
         });
       }
@@ -1367,6 +1372,7 @@ export function useJobsInFlightData(data) {
       if (r.status === 'Approved Order' && dis > 180) {
         flags.push({
           severity: dis > 270 ? 'high' : 'med',
+          kind: 'zombie',
           reason: `Approved ${dis}d ago · unusually long — verify still active`,
         });
       }
@@ -1375,12 +1381,14 @@ export function useJobsInFlightData(data) {
       if (r.status.startsWith('In-Progress') && dis > 180) {
         flags.push({
           severity: dis > 270 ? 'high' : 'med',
+          kind: 'zombie',
           reason: `In-progress ${dis}d · exceeds typical install duration`,
         });
       }
 
       // ── PO / AUTHORIZATION CHECKS ──────────────────────────
-      // Only applies to non-Skyline, non-INET orders (INET has its own workflow)
+      // These are data-hygiene issues, NOT zombies. The revenue IS coming;
+      // we just need the paperwork right.
       const applyPOChecks = !r.isSkyline && !r.isInet && r.gt > 0;
       if (applyPOChecks) {
         const po = String(r.po_number || '').trim();
@@ -1390,56 +1398,52 @@ export function useJobsInFlightData(data) {
         const hasPO = po.length > 0;
         const hasAuth = auth.length > 0;
 
-        // Known auth method types
         const isCustomerPO = authLower === 'customer po';
         const isNeedsPO = authLower === 'needs po';
         const isEmailApproval = authLower === 'email approval';
         const isSignedQuote = authLower === 'signed quote';
         const isVerbal = authLower.includes('verbal');
-        // Methods that legitimately don't need a PO
-        const poNotRequired = isEmailApproval || isSignedQuote;
 
-        // CASE 1: No auth method recorded at all — Linda didn't fill in IQ
         if (!hasAuth) {
           flags.push({
             severity: 'high',
+            kind: 'hygiene',
             reason: 'No authorization method in IQ — Linda needs to update',
           });
         }
-        // CASE 2: "Needs PO" — explicitly flagged as still waiting for a PO.
-        // This is the chase list: Linda knows work started, still needs a PO.
         else if (isNeedsPO) {
           flags.push({
             severity: 'high',
+            kind: 'hygiene',
+            subkind: 'needs_po',
             reason: 'Marked "Needs PO" · chase PO from client',
           });
         }
-        // CASE 3: Auth says PO expected but no PO# recorded
         else if (isCustomerPO && !hasPO) {
           flags.push({
             severity: 'high',
+            kind: 'hygiene',
             reason: 'Auth method is "Customer PO" but no PO# recorded — Linda needs to update',
           });
         }
-        // CASE 4: PO# recorded but amount missing
         else if (hasPO && (poAmt === 0 || !r.po_amount)) {
           flags.push({
             severity: 'high',
+            kind: 'hygiene',
             reason: 'PO# entered without amount — Linda needs to update IQ',
           });
         }
-        // CASE 5: PO amount doesn't match grand total — medium severity
-        // PO should equal full job value; progress billing applies to invoices, not POs
         else if (hasPO && poAmt > 0 && Math.abs(poAmt - r.gt) > 0.5) {
           flags.push({
             severity: 'med',
+            kind: 'hygiene',
             reason: `PO amount ${fmtForFlag(poAmt)} ≠ job ${fmtForFlag(r.gt)} — verify`,
           });
         }
-        // CASE 6: Verbal approval without PO — chase PO
         else if (!hasPO && isVerbal) {
           flags.push({
             severity: 'low',
+            kind: 'hygiene',
             reason: 'Verbal approval · chase PO from client',
           });
         }
@@ -1449,6 +1453,7 @@ export function useJobsInFlightData(data) {
       if (!r.pm || String(r.pm).trim() === '') {
         flags.push({
           severity: 'low',
+          kind: 'hygiene',
           reason: 'Missing PM · fix in IQ',
         });
       }
@@ -1465,30 +1470,39 @@ export function useJobsInFlightData(data) {
     // Walk all three buckets and classify
     const allInFlight = [...allRTI, ...allInProgress, ...allApproved];
     const cleanupQueue = [];
-    const cleanIds = new Set();
+    const revenueValidIds = new Set(); // orders that count toward "likely revenue"
 
     const sevRank = { high: 0, med: 1, low: 2 };
 
     allInFlight.forEach(r => {
       const flags = classify(r);
       if (flags.length > 0) {
-        // Pick the most severe flag for sort purposes; keep all for display
         flags.sort((a, b) => sevRank[a.severity] - sevRank[b.severity]);
         const top = flags[0];
+        const hasZombieFlag = flags.some(f => f.kind === 'zombie');
+        const hasNeedsPO = flags.some(f => f.subkind === 'needs_po');
+
         cleanupQueue.push({
           ...r,
           value: r.remaining || r.gt || 0,
           pctInvoiced: pctInvoiced(r),
           cleanupReason: flags.map(f => f.reason).join(' · '),
-          cleanupReasons: flags, // full array for modal
+          cleanupReasons: flags,
           cleanupSeverity: top.severity,
-          // Pick the most relevant date for context
+          cleanupKinds: [...new Set(flags.map(f => f.kind))],
+          hasNeedsPO,
           relevantDate: r.status === 'Approved Order' ? r.approved_start_date
                      : r.status.startsWith('In-Progress') ? r.inprog_start_date
                      : r.invoiced_date || r.inprog_start_date || r.approved_start_date || r.created_date,
         });
+
+        // Hygiene-only flags: order stays in revenue-valid lists (PO issues, missing PM)
+        // Zombie flags: order is probably not real — exclude from revenue
+        if (!hasZombieFlag) {
+          revenueValidIds.add(r.order_number);
+        }
       } else {
-        cleanIds.add(r.order_number);
+        revenueValidIds.add(r.order_number);
       }
     });
 
@@ -1501,7 +1515,7 @@ export function useJobsInFlightData(data) {
 
     // ── CLEAN LISTS (zombies removed) ────────────────────────
     const readyToInvoice = allRTI
-      .filter(r => cleanIds.has(r.order_number))
+      .filter(r => revenueValidIds.has(r.order_number))
       .map(r => ({
         ...r,
         value: r.remaining || r.gt,
@@ -1512,7 +1526,7 @@ export function useJobsInFlightData(data) {
       .sort((a, b) => (b.order_number || '').localeCompare(a.order_number || ''));
 
     const inProgress = allInProgress
-      .filter(r => cleanIds.has(r.order_number))
+      .filter(r => revenueValidIds.has(r.order_number))
       .map(r => ({
         ...r,
         value: r.remaining || r.gt,
@@ -1521,7 +1535,7 @@ export function useJobsInFlightData(data) {
       .sort((a, b) => (a.daysInStatus || 0) - (b.daysInStatus || 0)); // fresh first (closer to completion expectation)
 
     const approved = allApproved
-      .filter(r => cleanIds.has(r.order_number))
+      .filter(r => revenueValidIds.has(r.order_number))
       .map(r => ({
         ...r,
         value: r.remaining || r.gt,
@@ -1595,6 +1609,7 @@ export function useJobsInFlightData(data) {
       cleanupQueue,
       cleanupCount,
       cleanupFace,
+      needsPOCount: cleanupQueue.filter(r => r.hasNeedsPO).length,
 
       // Stat strip
       likelyRevenue,

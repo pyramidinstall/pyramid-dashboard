@@ -65,9 +65,11 @@ export default function Backlog({ data }) {
     return true;
   });
 
-  const cleanupFiltered = d.cleanupQueue.filter(r =>
-    cleanupSeverity === 'all' || r.cleanupSeverity === cleanupSeverity
-  );
+  const cleanupFiltered = d.cleanupQueue.filter(r => {
+    if (cleanupSeverity === 'all') return true;
+    if (cleanupSeverity === 'needs_po') return r.hasNeedsPO;
+    return r.cleanupSeverity === cleanupSeverity;
+  });
 
   // Scroll helper for stat card → section
   const scrollTo = (id) => {
@@ -114,25 +116,31 @@ export default function Backlog({ data }) {
             These entries triggered at least one honesty check. For each: open the order in IQ, check your email for context, confirm with Linda/PM if needed. These are not auto-closed — review one by one.
           </div>
 
-          {/* Severity filter */}
-          <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-            {['all', 'high', 'med', 'low'].map(s => {
-              const count = s === 'all' ? d.cleanupCount : d.cleanupQueue.filter(r => r.cleanupSeverity === s).length;
-              const isActive = cleanupSeverity === s;
-              const labels = { all: 'All', high: 'High priority', med: 'Medium', low: 'Data hygiene' };
+          {/* Severity filter — includes a dedicated "Needs PO" chase list */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+            {[
+              { key: 'all', label: 'All', count: d.cleanupCount },
+              { key: 'needs_po', label: 'Needs PO (chase list)', count: d.needsPOCount || 0 },
+              { key: 'high', label: 'High priority', count: d.cleanupQueue.filter(r => r.cleanupSeverity === 'high').length },
+              { key: 'med', label: 'Medium', count: d.cleanupQueue.filter(r => r.cleanupSeverity === 'med').length },
+              { key: 'low', label: 'Data hygiene', count: d.cleanupQueue.filter(r => r.cleanupSeverity === 'low').length },
+            ].map(f => {
+              const isActive = cleanupSeverity === f.key;
+              const isNeedsPO = f.key === 'needs_po';
+              const activeColor = isNeedsPO ? C.amber : C.text;
               return (
                 <button
-                  key={s}
-                  onClick={() => setCleanupSeverity(s)}
+                  key={f.key}
+                  onClick={() => setCleanupSeverity(f.key)}
                   style={{
                     padding: '5px 12px', fontSize: 11, fontWeight: 600,
-                    background: isActive ? C.text : 'transparent',
-                    color: isActive ? '#fff' : C.textSub,
-                    border: `0.5px solid ${isActive ? C.text : C.border}`,
+                    background: isActive ? activeColor : 'transparent',
+                    color: isActive ? '#fff' : isNeedsPO ? C.amber : C.textSub,
+                    border: `0.5px solid ${isActive ? activeColor : isNeedsPO ? C.amber : C.border}`,
                     borderRadius: 4, cursor: 'pointer',
                   }}
                 >
-                  {labels[s]} · {count}
+                  {f.label} · {f.count}
                 </button>
               );
             })}
@@ -149,7 +157,7 @@ export default function Backlog({ data }) {
                   render: v => <span style={{ color: C.textMuted, fontSize: 11 }}>#{v}</span> },
                 { key: 'order_name', label: 'Order name', width: '24%',
                   render: (v, r) => v || r.customer || '—' },
-                { key: 'customer', label: 'Dealer / PM', width: '20%',
+                { key: 'customer', label: 'Dealer / PM', width: '18%',
                   render: (_, r) => (
                     <span style={{ fontSize: 11 }}>
                       {r.customer}
@@ -161,8 +169,21 @@ export default function Backlog({ data }) {
                   render: v => <span style={{ fontSize: 10, color: C.textSub }}>{v}</span> },
                 { key: 'value', label: 'Remaining', width: '10%',
                   render: v => fmtCurrency(v || 0) },
-                { key: 'relevantDate', label: 'Date', width: '9%',
-                  render: v => <span style={{ fontSize: 11, color: C.textMuted }}>{fmtDate(v)}</span> },
+                { key: 'relevantDate', label: 'Status since', width: '11%',
+                  render: (v, r) => {
+                    // Contextual date: what the date means depends on status
+                    const dateText = fmtDate(v);
+                    const statusLabel = r.status === 'Approved Order' ? 'approved'
+                                     : r.status.startsWith('In-Progress') ? 'in-progress'
+                                     : r.status === 'Ready to Invoice' ? 'RTI'
+                                     : '';
+                    return (
+                      <span style={{ fontSize: 11, color: C.textMuted }}>
+                        {dateText}
+                        {statusLabel && <><br /><span style={{ fontSize: 9 }}>{statusLabel}</span></>}
+                      </span>
+                    );
+                  } },
                 { key: 'cleanupReason', label: 'Why flagged', width: '18%',
                   render: (v, r) => (
                     <span style={{ fontSize: 11,
@@ -356,6 +377,9 @@ export default function Backlog({ data }) {
             ['PM', formatPM(selected.pm)],
             ['Status', selected.status],
             ['Grand total', fmtCurrency(selected.gt)],
+            ['PO #', selected.po_number || '—'],
+            ['PO amount', selected.po_amount ? fmtCurrency(parseFloat(selected.po_amount) || 0) : '—'],
+            ['Authorization method', selected.auth_method || '—'],
             ['Dollars invoiced', fmtCurrency(parseFloat(selected.dollars_invoiced) || 0)],
             ['Invoiced %', selected.pctInvoiced !== undefined ? `${Math.round(selected.pctInvoiced * 100)}%` : '—'],
             ['Remaining', fmtCurrency(selected.value || selected.remaining || 0)],
@@ -365,7 +389,19 @@ export default function Backlog({ data }) {
             ['Days in status', selected.daysInStatus !== null && selected.daysInStatus !== undefined ? `${selected.daysInStatus} days` : '—'],
             ['Confidence tier', selected.backlogTier || '—'],
             ['Weighted value', fmtCurrency(selected.backlogWeighted || 0)],
-            ...(selected.cleanupReason ? [['Cleanup flag', selected.cleanupReason]] : []),
+            ...(selected.cleanupReasons && selected.cleanupReasons.length > 0
+              ? [['Cleanup flags', (
+                  <div>
+                    {selected.cleanupReasons.map((f, i) => (
+                      <div key={i} style={{
+                        fontSize: 11,
+                        color: f.severity === 'high' ? C.red : f.severity === 'med' ? C.amber : C.textSub,
+                        marginBottom: 2,
+                      }}>• {f.reason}</div>
+                    ))}
+                  </div>
+                )]]
+              : []),
             ...(selected.modification_notes ? [['Notes', selected.modification_notes]] : []),
           ].map(([k, v]) => <DetailRow key={k} label={k} value={v} />)}
         </Modal>
