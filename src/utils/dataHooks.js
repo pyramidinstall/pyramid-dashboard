@@ -1883,17 +1883,30 @@ export function useRelationshipData(data) {
         const lifetimeMonthly = totalQuotes / monthsActive;
 
         // Standard deviation of monthly volume — for cooling detection
-        // Bucket all quotes by month to compute SD
+        // Bucket all quotes by month to compute SD.
+        // CRITICAL: Fill in zero-count months between firstQuote and today
+        // so silent stretches don't artificially inflate the baseline.
         const monthlyBuckets = {};
         quotesWithDate.forEach(q => {
           const k = `${q.date.getFullYear()}-${String(q.date.getMonth() + 1).padStart(2, '0')}`;
           monthlyBuckets[k] = (monthlyBuckets[k] || 0) + 1;
         });
+        // Walk every month from firstQuote to today; add zeros for empty months
+        if (firstQuote) {
+          const cursor = new Date(firstQuote.getFullYear(), firstQuote.getMonth(), 1);
+          const end = new Date(today.getFullYear(), today.getMonth(), 1);
+          while (cursor <= end) {
+            const k = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`;
+            if (!(k in monthlyBuckets)) monthlyBuckets[k] = 0;
+            cursor.setMonth(cursor.getMonth() + 1);
+          }
+        }
         const monthCounts = Object.values(monthlyBuckets);
+        let monthlyMean = 0;
         let monthlySD = 0;
         if (monthCounts.length >= 3) {
-          const mean = monthCounts.reduce((s, v) => s + v, 0) / monthCounts.length;
-          const variance = monthCounts.reduce((s, v) => s + (v - mean) ** 2, 0) / monthCounts.length;
+          monthlyMean = monthCounts.reduce((s, v) => s + v, 0) / monthCounts.length;
+          const variance = monthCounts.reduce((s, v) => s + (v - monthlyMean) ** 2, 0) / monthCounts.length;
           monthlySD = Math.sqrt(variance);
         }
 
@@ -1919,7 +1932,9 @@ export function useRelationshipData(data) {
         const openQuotes = p.quotes.filter(q => q.isOpen);
 
         // ── STATUS CLASSIFICATION ──────────────────────────────
-        // - cold: 14+ days silent AND has 3+ historical quotes
+        // - reactivation: 180+ days silent AND has 3+ historical quotes
+        //                (warm leads who know us — don't clutter cold list with them)
+        // - cold: 14-180 days silent AND has 3+ historical quotes
         // - new: <6 months tenure
         // - cooling: established (10+ quotes, 6+ months) AND L30 below baseline
         //          AND prior 30 also below baseline (sustained slowdown)
@@ -1930,7 +1945,9 @@ export function useRelationshipData(data) {
         const isEstablished = totalQuotes >= 10 && tenureMonths >= 6;
         const isNew = tenureMonths < 6;
 
-        if (daysSinceLastQuote !== null && daysSinceLastQuote >= 14 && hasMinHistory) {
+        if (daysSinceLastQuote !== null && daysSinceLastQuote >= 180 && hasMinHistory) {
+          status = 'reactivation';
+        } else if (daysSinceLastQuote !== null && daysSinceLastQuote >= 14 && hasMinHistory) {
           status = 'cold';
         } else if (isNew && totalQuotes >= 1) {
           status = 'new';
@@ -1948,11 +1965,16 @@ export function useRelationshipData(data) {
 
         // ── SUGGESTED PRICING POSTURE ──────────────────────────
         // Aggressive: cold, cooling, eroding CR, OR new+heating (capture wave)
+        // Reactivation: aggressive (rebuild trust)
         // Premium: established + CR ≥ baseline + steady or hot
         // Market: everything else
         let suggestedPricing = 'Market';
         let pricingReason = '';
-        if (status === 'cold' || status === 'cooling' || crEroded) {
+        if (status === 'reactivation') {
+          suggestedPricing = 'Aggressive';
+          const monthsSilent = Math.floor(daysSinceLastQuote / 30);
+          pricingReason = `Silent ${monthsSilent}mo · sharpen pricing to win them back, raise as trust rebuilds`;
+        } else if (status === 'cold' || status === 'cooling' || crEroded) {
           suggestedPricing = 'Aggressive';
           pricingReason = status === 'cold'
             ? `Cold for ${daysSinceLastQuote}d · sharpen pricing to restart momentum`
@@ -2015,6 +2037,8 @@ export function useRelationshipData(data) {
     const cooling = pmList.filter(p => p.status === 'cooling')
       .sort((a, b) => b.revenueWon - a.revenueWon);
     const heatingUp = pmList.filter(p => p.status === 'hot')
+      .sort((a, b) => b.revenueWon - a.revenueWon);
+    const reactivation = pmList.filter(p => p.status === 'reactivation')
       .sort((a, b) => b.revenueWon - a.revenueWon);
 
     // ── SINGLE-PM DEALERS (sourcing prompt) ──────────────────
@@ -2080,6 +2104,7 @@ export function useRelationshipData(data) {
       goingCold,
       cooling,
       heatingUp,
+      reactivation,
       singlePMDealers,
       newSources,
       // Legacy (kept for any other consumers)

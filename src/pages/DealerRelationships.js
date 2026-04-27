@@ -39,6 +39,7 @@ function StatusBadge({ status }) {
     new: { type: 'blue', label: 'New' },
     hot: { type: 'green', label: 'Hot' },
     steady: { type: 'gray', label: 'Steady' },
+    reactivation: { type: 'gray', label: 'Reactivate' },
   };
   const cfg = map[status] || { type: 'gray', label: status };
   return <Badge type={cfg.type}>{cfg.label}</Badge>;
@@ -85,13 +86,15 @@ function ChannelBadge({ channels }) {
   );
 }
 
-// Velocity delta (last 30 vs prior 30)
+// Velocity delta (last 30 vs prior 30) — most recent number first
 function VelocityDelta({ last, prior }) {
   const arrow = last > prior ? '↑' : last < prior ? '↓' : '→';
   const color = last > prior ? C.green : last < prior ? C.red : C.textMuted;
   return (
-    <span style={{ fontSize: 11, color: C.textSub }}>
-      {prior} → {last} <span style={{ color, fontWeight: 600 }}>{arrow}</span>
+    <span style={{ fontSize: 11, color: C.textSub, whiteSpace: 'nowrap' }}>
+      <span style={{ fontWeight: 600, color: C.text }}>{last}</span>
+      <span style={{ color: C.textMuted }}> (was {prior})</span>
+      <span style={{ color, fontWeight: 600, marginLeft: 4 }}>{arrow}</span>
     </span>
   );
 }
@@ -104,10 +107,25 @@ export default function DealerRelationships({ data }) {
   const [searchText, setSearchText] = useState('');
   const [selectedPM, setSelectedPM] = useState(null);
   const [selectedQuote, setSelectedQuote] = useState(null);
+  const [includeINET, setIncludeINET] = useState(false); // default off — INET data is stale until recurring report lands
+
+  // Apply INET filter to all derived lists
+  const excludeINET = (pm) => !pm.channels.includes('INET') || pm.channels.includes('Non-INET');
+  const goingCold = useMemo(() => includeINET ? (d?.goingCold || []) : (d?.goingCold || []).filter(excludeINET), [d, includeINET]);
+  const cooling = useMemo(() => includeINET ? (d?.cooling || []) : (d?.cooling || []).filter(excludeINET), [d, includeINET]);
+  const heatingUp = useMemo(() => includeINET ? (d?.heatingUp || []) : (d?.heatingUp || []).filter(excludeINET), [d, includeINET]);
+  const reactivation = useMemo(() => includeINET ? (d?.reactivation || []) : (d?.reactivation || []).filter(excludeINET), [d, includeINET]);
+  const newSourcesFiltered = useMemo(() =>
+    includeINET ? (d?.newSources || []) : (d?.newSources || []).filter(s => s.dealer !== 'INSTALL Net'),
+  [d, includeINET]);
 
   const filteredPMs = useMemo(() => {
     if (!d) return [];
     return d.pmList.filter(p => {
+      // INET toggle
+      if (!includeINET && p.channels.includes('INET') && !p.channels.includes('Non-INET')) {
+        return false;
+      }
       if (channelFilter !== 'all') {
         if (channelFilter === 'inet' && !p.channels.includes('INET')) return false;
         if (channelFilter === 'noninet' && !p.channels.includes('Non-INET')) return false;
@@ -121,20 +139,37 @@ export default function DealerRelationships({ data }) {
       }
       return true;
     });
-  }, [d, channelFilter, statusFilter, searchText]);
+  }, [d, includeINET, channelFilter, statusFilter, searchText]);
 
   if (!d) return null;
 
   // Action list: get rows for current tab
   const actionRows =
-    actionTab === 'cold' ? d.goingCold :
-    actionTab === 'cooling' ? d.cooling :
-    d.heatingUp;
+    actionTab === 'cold' ? goingCold :
+    actionTab === 'cooling' ? cooling :
+    heatingUp;
 
   return (
     <div style={{ padding: '20px 24px', maxWidth: 1320, margin: '0 auto' }}>
-      <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text, marginBottom: 4 }}>Dealer relationships</h2>
-      <p style={{ fontSize: 12, color: C.textSub, marginBottom: 18 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 4 }}>
+        <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text, margin: 0 }}>Dealer relationships</h2>
+        <label style={{
+          display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+          fontSize: 11, color: C.textSub, userSelect: 'none', flexShrink: 0,
+        }}>
+          <input
+            type="checkbox"
+            checked={includeINET}
+            onChange={e => setIncludeINET(e.target.checked)}
+            style={{ cursor: 'pointer' }}
+          />
+          Include INET PMs
+          <span style={{ color: C.textMuted, fontSize: 10, marginLeft: 2 }}>
+            (off — INET data is stale until recurring report lands)
+          </span>
+        </label>
+      </div>
+      <p style={{ fontSize: 12, color: C.textSub, marginBottom: 18, marginTop: 4 }}>
         PMs and dealers across all channels · use mid-quote to gauge pricing posture · click any row for history
       </p>
 
@@ -145,15 +180,15 @@ export default function DealerRelationships({ data }) {
         <Grid cols={3} gap={10} style={{ marginBottom: 14 }}>
           <ActionStatCard
             label="Going cold"
-            count={d.goingCold.length}
-            sub="No quote in 14+ days"
+            count={goingCold.length}
+            sub="No quote in 14 days to 6 months"
             color={C.red}
             active={actionTab === 'cold'}
             onClick={() => setActionTab('cold')}
           />
           <ActionStatCard
             label="Cooling"
-            count={d.cooling.length}
+            count={cooling.length}
             sub="Velocity below personal baseline"
             color={C.amber}
             active={actionTab === 'cooling'}
@@ -161,7 +196,7 @@ export default function DealerRelationships({ data }) {
           />
           <ActionStatCard
             label="Heating up"
-            count={d.heatingUp.length}
+            count={heatingUp.length}
             sub="Velocity above personal baseline"
             color={C.green}
             active={actionTab === 'hot'}
@@ -270,6 +305,7 @@ export default function DealerRelationships({ data }) {
             <option value="cooling">Cooling</option>
             <option value="cold">Cold</option>
             <option value="new">New</option>
+            <option value="reactivation">Reactivate</option>
           </select>
           <span style={{ fontSize: 11, color: C.textMuted, marginLeft: 'auto' }}>
             {filteredPMs.length} of {d.pmList.length} PMs
@@ -324,6 +360,62 @@ export default function DealerRelationships({ data }) {
         )}
       </Card>
 
+      {/* ── REACTIVATION CANDIDATES ──────────────────────────────────── */}
+      <SectionLabel>Reactivation candidates — silent 6+ months, worth reviving</SectionLabel>
+      <Card style={{ marginBottom: 16 }}>
+        <p style={{ fontSize: 12, color: C.textSub, marginTop: 0, marginBottom: 10 }}>
+          PMs who used to send us business but have gone quiet for 6+ months. They already know us — easier to reactivate than to find new ones. Sorted by historical revenue.
+        </p>
+        {reactivation.length === 0 ? (
+          <div style={{ padding: '20px 0', textAlign: 'center', fontSize: 12, color: C.textMuted }}>
+            No long-silent PMs to reactivate.
+          </div>
+        ) : (
+          <Table
+            cols={[
+              { key: 'pm', label: 'PM / Dealer', width: '28%',
+                render: (_, r) => (
+                  <span style={{ fontSize: 12 }}>
+                    <span style={{ fontWeight: 600 }}>{formatPM(r.pm)}</span>
+                    <br />
+                    <span style={{ color: C.textSub, fontSize: 11 }}>{r.dealer}</span>
+                  </span>
+                ) },
+              { key: 'totalQuotes', label: 'Lifetime', width: '14%',
+                render: (_, r) => (
+                  <span style={{ fontSize: 11 }}>
+                    {r.totalQuotes} quotes
+                    <br />
+                    <span style={{ color: C.textSub, fontSize: 10 }}>
+                      {fmtCurrency(r.revenueWon)} won
+                    </span>
+                  </span>
+                ) },
+              { key: 'lifetimeCR', label: 'Lifetime CR', width: '12%',
+                render: v => v !== null
+                  ? <span style={{ fontSize: 11 }}>{Math.round(v * 100)}%</span>
+                  : <span style={{ fontSize: 11, color: C.textMuted }}>—</span> },
+              { key: 'daysSinceLastQuote', label: 'Silent for', width: '14%',
+                render: (v) => {
+                  const months = Math.floor(v / 30);
+                  return <span style={{ fontSize: 11, color: C.textSub }}>
+                    {months} months
+                  </span>;
+                } },
+              { key: 'lastQuoteDate', label: 'Last quote', width: '14%',
+                render: v => <span style={{ fontSize: 11, color: C.textMuted }}>{fmtDate(v)}</span> },
+              { key: 'avgValue', label: 'Avg quote', width: '10%',
+                render: v => <span style={{ fontSize: 11 }}>{fmtCurrency(v)}</span> },
+              { key: 'suggestedPricing', label: 'Suggested pricing', width: '10%',
+                render: v => <PricingBadge pricing={v} /> },
+            ]}
+            rows={reactivation}
+            onRowClick={setSelectedPM}
+            defaultSort={{ key: 'revenueWon', dir: 'desc' }}
+          />
+        )}
+      </Card>
+
       {/* ── SINGLE-PM DEALERS ─────────────────────────────────────────── */}
       <SectionLabel>Single-PM dealers — sourcing prompts</SectionLabel>
       <Card style={{ marginBottom: 16 }}>
@@ -354,7 +446,7 @@ export default function DealerRelationships({ data }) {
       {/* ── NEW SOURCES ───────────────────────────────────────────────── */}
       <SectionLabel>New sources — last 90 days</SectionLabel>
       <Card style={{ marginBottom: 16 }}>
-        {d.newSources.length === 0 ? (
+        {newSourcesFiltered.length === 0 ? (
           <div style={{ padding: '20px 0', textAlign: 'center', fontSize: 12, color: C.textMuted }}>
             No new PMs in the last 90 days.
           </div>
@@ -366,7 +458,7 @@ export default function DealerRelationships({ data }) {
               { key: 'firstDate', label: 'First quote', width: '20%' },
               { key: 'quoteCount', label: 'Quotes since', width: '20%' },
             ]}
-            rows={d.newSources}
+            rows={newSourcesFiltered}
             onRowClick={r => {
               const pm = d.pmList.find(p => p.pm === r.pm);
               if (pm) setSelectedPM(pm);
