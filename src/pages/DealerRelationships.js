@@ -368,6 +368,7 @@ export default function DealerRelationships({ data }) {
             rows={filteredPMs}
             onRowClick={setSelectedPM}
             defaultSort={{ key: 'totalQuotes', dir: 'desc' }}
+            searchable={false}
           />
         )}
       </Card>
