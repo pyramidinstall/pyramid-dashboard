@@ -2110,7 +2110,6 @@ export function useRelationshipData(data) {
       // Legacy (kept for any other consumers)
       goingColdLegacy: [],
       rebuilding: [],
-      reactivation: [],
       enrichedContacts: contacts || [],
       prospectList: prospects || [],
       newDealers: newSources, // alias for backward compat

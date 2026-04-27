@@ -21,19 +21,23 @@ function fmtLastQuote(daysAgo, date) {
   if (daysAgo < 30) return `${daysAgo}d ago`;
   if (!date) return `${daysAgo}d ago`;
   const d = new Date(date);
+  const monthName = d.toLocaleDateString('en-US', { month: 'short' });
+  const yy = String(d.getFullYear()).slice(-2);
   // For dates 6+ months old, show "Mon 'YY" so the year is unambiguous
   if (daysAgo >= 180) {
-    return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+    return `${monthName} '${yy}`;
   }
-  // 30 days to 6 months: show month + day with year suffix
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+  // 30 days to 6 months: "Mon D 'YY"
+  return `${monthName} ${d.getDate()} '${yy}`;
 }
 
 function fmtDate(d) {
   if (!d) return '—';
   const dt = new Date(d);
   if (isNaN(dt)) return '—';
-  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+  const monthName = dt.toLocaleDateString('en-US', { month: 'short' });
+  const yy = String(dt.getFullYear()).slice(-2);
+  return `${monthName} ${dt.getDate()} '${yy}`;
 }
 
 // Status badge with color
@@ -109,7 +113,6 @@ export default function DealerRelationships({ data }) {
   const [actionTab, setActionTab] = useState('cold');
   const [channelFilter, setChannelFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [searchText, setSearchText] = useState('');
   const [selectedPM, setSelectedPM] = useState(null);
   const [selectedQuote, setSelectedQuote] = useState(null);
   const [includeINET, setIncludeINET] = useState(false); // default off — INET data is stale until recurring report lands
@@ -136,15 +139,9 @@ export default function DealerRelationships({ data }) {
         if (channelFilter === 'noninet' && !p.channels.includes('Non-INET')) return false;
       }
       if (statusFilter !== 'all' && p.status !== statusFilter) return false;
-      if (searchText.trim()) {
-        const q = searchText.toLowerCase();
-        if (!p.pm.toLowerCase().includes(q) && !(p.dealer || '').toLowerCase().includes(q)) {
-          return false;
-        }
-      }
       return true;
     });
-  }, [d, includeINET, channelFilter, statusFilter, searchText]);
+  }, [d, includeINET, channelFilter, statusFilter]);
 
   if (!d) return null;
 
@@ -268,20 +265,8 @@ export default function DealerRelationships({ data }) {
       {/* ── PM SCORECARD ──────────────────────────────────────────────── */}
       <SectionLabel>PM scorecard — full lookup · click any row for history</SectionLabel>
       <Card style={{ marginBottom: 16 }}>
-        {/* Filter row */}
+        {/* Filter row — text search comes from Table's built-in input */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <input
-            type="text"
-            placeholder="Filter by PM or dealer…"
-            value={searchText}
-            onChange={e => setSearchText(e.target.value)}
-            style={{
-              flex: '1 1 200px', minWidth: 180,
-              fontSize: 12, padding: '5px 10px',
-              border: `0.5px solid ${C.border}`, borderRadius: 4,
-              outline: 'none',
-            }}
-          />
           <select
             value={channelFilter}
             onChange={e => setChannelFilter(e.target.value)}
