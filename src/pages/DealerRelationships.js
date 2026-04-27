@@ -113,6 +113,7 @@ export default function DealerRelationships({ data }) {
   const [actionTab, setActionTab] = useState('cold');
   const [channelFilter, setChannelFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [searchText, setSearchText] = useState('');
   const [selectedPM, setSelectedPM] = useState(null);
   const [selectedQuote, setSelectedQuote] = useState(null);
   const [includeINET, setIncludeINET] = useState(false); // default off — INET data is stale until recurring report lands
@@ -141,9 +142,16 @@ export default function DealerRelationships({ data }) {
         if (channelFilter === 'noninet' && !p.channels.includes('Non-INET')) return false;
       }
       if (statusFilter !== 'all' && p.status !== statusFilter) return false;
+      // Text search across PM name and dealer name
+      if (searchText.trim()) {
+        const q = searchText.toLowerCase();
+        const pmMatches = p.pm.toLowerCase().includes(q);
+        const dealerMatches = (p.dealer || '').toLowerCase().includes(q);
+        if (!pmMatches && !dealerMatches) return false;
+      }
       return true;
     });
-  }, [d, includeINET, channelFilter, statusFilter]);
+  }, [d, includeINET, channelFilter, statusFilter, searchText]);
 
   if (!d) return null;
 
@@ -267,8 +275,20 @@ export default function DealerRelationships({ data }) {
       {/* ── PM SCORECARD ──────────────────────────────────────────────── */}
       <SectionLabel>PM scorecard — full lookup · click any row for history</SectionLabel>
       <Card style={{ marginBottom: 16 }}>
-        {/* Filter row — text search comes from Table's built-in input */}
+        {/* Filter row — custom search supports both PM and dealer names */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            placeholder="Filter by PM or dealer…"
+            value={searchText}
+            onChange={e => setSearchText(e.target.value)}
+            style={{
+              flex: '1 1 200px', minWidth: 180,
+              fontSize: 12, padding: '5px 10px',
+              border: `0.5px solid ${C.border}`, borderRadius: 4,
+              outline: 'none',
+            }}
+          />
           <select
             value={channelFilter}
             onChange={e => setChannelFilter(e.target.value)}
