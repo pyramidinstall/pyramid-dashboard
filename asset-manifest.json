@@ -1,10 +1,10 @@
 {
   "files": {
-    "main.js": "/pyramid-dashboard/static/js/main.42870149.js",
+    "main.js": "/pyramid-dashboard/static/js/main.6d987293.js",
     "index.html": "/pyramid-dashboard/index.html",
-    "main.42870149.js.map": "/pyramid-dashboard/static/js/main.42870149.js.map"
+    "main.6d987293.js.map": "/pyramid-dashboard/static/js/main.6d987293.js.map"
   },
   "entrypoints": [
-    "static/js/main.42870149.js"
+    "static/js/main.6d987293.js"
   ]
 }
