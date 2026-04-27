@@ -130,6 +130,8 @@ export default function DealerRelationships({ data }) {
   const filteredPMs = useMemo(() => {
     if (!d) return [];
     return d.pmList.filter(p => {
+      // Reactivation candidates live in their own section — exclude unless user explicitly filters for them
+      if (p.status === 'reactivation' && statusFilter !== 'reactivation') return false;
       // INET toggle
       if (!includeINET && p.channels.includes('INET') && !p.channels.includes('Non-INET')) {
         return false;
@@ -298,7 +300,7 @@ export default function DealerRelationships({ data }) {
             <option value="reactivation">Reactivate</option>
           </select>
           <span style={{ fontSize: 11, color: C.textMuted, marginLeft: 'auto' }}>
-            {filteredPMs.length} of {d.pmList.length} PMs
+            {filteredPMs.length} active PMs · {(d?.reactivation?.length || 0)} silent in Reactivation below
           </span>
         </div>
 
