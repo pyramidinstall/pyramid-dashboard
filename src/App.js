@@ -17,7 +17,7 @@ const CLIENT_ID = '161922713447-e3lu6l1bbihuj0ru3b28bdothktvjplj.apps.googleuser
 
 function Dashboard() {
   const { user, accessToken } = useAuth();
-  const [activePage, setActivePage] = useState(user?.isOwner ? 'overview' : 'pipeline');
+  const [activePage, setActivePage] = useState('overview');
   const [rawData, setRawData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
