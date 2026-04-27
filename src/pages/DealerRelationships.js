@@ -21,7 +21,12 @@ function fmtLastQuote(daysAgo, date) {
   if (daysAgo < 30) return `${daysAgo}d ago`;
   if (!date) return `${daysAgo}d ago`;
   const d = new Date(date);
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  // For dates 6+ months old, show "Mon 'YY" so the year is unambiguous
+  if (daysAgo >= 180) {
+    return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+  }
+  // 30 days to 6 months: show month + day with year suffix
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
 }
 
 function fmtDate(d) {
