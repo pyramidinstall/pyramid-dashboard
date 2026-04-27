@@ -155,9 +155,9 @@ export default function Backlog({ data }) {
               cols={[
                 { key: 'order_number', label: '#', width: '8%',
                   render: v => <span style={{ color: C.textMuted, fontSize: 11 }}>#{v}</span> },
-                { key: 'order_name', label: 'Order name', width: '24%',
+                { key: 'order_name', label: 'Order name', width: '22%',
                   render: (v, r) => v || r.customer || '—' },
-                { key: 'customer', label: 'Dealer / PM', width: '18%',
+                { key: 'customer', label: 'Dealer / PM', width: '17%',
                   render: (_, r) => (
                     <span style={{ fontSize: 11 }}>
                       {r.customer}
@@ -165,13 +165,12 @@ export default function Backlog({ data }) {
                       <span style={{ color: C.textMuted, fontSize: 10 }}>{formatPM(r.pm)}</span>
                     </span>
                   ) },
-                { key: 'status', label: 'Status', width: '11%',
+                { key: 'status', label: 'Status', width: '9%',
                   render: v => <span style={{ fontSize: 10, color: C.textSub }}>{v}</span> },
-                { key: 'value', label: 'Remaining', width: '10%',
+                { key: 'value', label: 'Remaining', width: '9%',
                   render: v => fmtCurrency(v || 0) },
-                { key: 'relevantDate', label: 'Status since', width: '11%',
+                { key: 'relevantDate', label: 'Status since', width: '10%',
                   render: (v, r) => {
-                    // Contextual date: what the date means depends on status
                     const dateText = fmtDate(v);
                     const statusLabel = r.status === 'Approved Order' ? 'approved'
                                      : r.status.startsWith('In-Progress') ? 'in-progress'
@@ -184,12 +183,15 @@ export default function Backlog({ data }) {
                       </span>
                     );
                   } },
-                { key: 'cleanupReason', label: 'Why flagged', width: '18%',
+                { key: 'cleanupReason', label: 'Why flagged', width: '25%',
                   render: (v, r) => (
                     <span style={{ fontSize: 11,
                       color: r.cleanupSeverity === 'high' ? C.red
                            : r.cleanupSeverity === 'med' ? C.amber
-                           : C.textSub }}>
+                           : C.textSub,
+                      whiteSpace: 'normal',
+                      lineHeight: 1.3,
+                    }}>
                       {v}
                     </span>
                   ) },

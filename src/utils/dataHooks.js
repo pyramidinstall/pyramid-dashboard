@@ -1345,8 +1345,8 @@ export function useJobsInFlightData(data) {
           severity: 'high',
           kind: 'zombie',
           reason: r.isInet
-            ? 'INET order with $0 value — verify with Linda'
-            : '$0 value — check IQ and confirm with Linda',
+            ? 'INET $0 value — verify with Linda'
+            : '$0 value — verify with Linda',
         });
       }
 
@@ -1355,7 +1355,7 @@ export function useJobsInFlightData(data) {
         flags.push({
           severity: 'high',
           kind: 'zombie',
-          reason: `${Math.round(pct * 100)}% invoiced · status hasn't closed in IQ`,
+          reason: `${Math.round(pct * 100)}% invoiced · status not closed`,
         });
       }
 
@@ -1364,7 +1364,7 @@ export function useJobsInFlightData(data) {
         flags.push({
           severity: 'high',
           kind: 'zombie',
-          reason: 'No remaining value · likely complete but status open',
+          reason: 'No remaining value · likely complete',
         });
       }
 
@@ -1373,7 +1373,7 @@ export function useJobsInFlightData(data) {
         flags.push({
           severity: dis > 270 ? 'high' : 'med',
           kind: 'zombie',
-          reason: `Approved ${dis}d ago · unusually long — verify still active`,
+          reason: `Approved ${dis}d ago · verify still active`,
         });
       }
 
@@ -1382,7 +1382,7 @@ export function useJobsInFlightData(data) {
         flags.push({
           severity: dis > 270 ? 'high' : 'med',
           kind: 'zombie',
-          reason: `In-progress ${dis}d · exceeds typical install duration`,
+          reason: `In-progress ${dis}d · exceeds norm`,
         });
       }
 
@@ -1403,48 +1403,39 @@ export function useJobsInFlightData(data) {
         const isEmailApproval = authLower === 'email approval';
         const isSignedQuote = authLower === 'signed quote';
         const isVerbal = authLower.includes('verbal');
+        // Any auth method that legitimately requires a PO
+        const poExpected = isCustomerPO || isNeedsPO || isVerbal;
 
         if (!hasAuth) {
           flags.push({
             severity: 'high',
             kind: 'hygiene',
-            reason: 'No authorization method in IQ — Linda needs to update',
+            reason: 'No auth method in IQ',
           });
         }
-        else if (isNeedsPO) {
+        // UNIFIED: PO is expected but missing — Linda's chase list.
+        // Includes "Customer PO" without PO#, explicit "Needs PO", verbal approval.
+        // All three mean "we need to chase a PO" — Linda doesn't need them split out.
+        else if (poExpected && !hasPO) {
           flags.push({
             severity: 'high',
             kind: 'hygiene',
             subkind: 'needs_po',
-            reason: 'Marked "Needs PO" · chase PO from client',
-          });
-        }
-        else if (isCustomerPO && !hasPO) {
-          flags.push({
-            severity: 'high',
-            kind: 'hygiene',
-            reason: 'Auth method is "Customer PO" but no PO# recorded — Linda needs to update',
+            reason: 'Needs PO',
           });
         }
         else if (hasPO && (poAmt === 0 || !r.po_amount)) {
           flags.push({
             severity: 'high',
             kind: 'hygiene',
-            reason: 'PO# entered without amount — Linda needs to update IQ',
+            reason: 'PO# entered without amount',
           });
         }
         else if (hasPO && poAmt > 0 && Math.abs(poAmt - r.gt) > 0.5) {
           flags.push({
             severity: 'med',
             kind: 'hygiene',
-            reason: `PO amount ${fmtForFlag(poAmt)} ≠ job ${fmtForFlag(r.gt)} — verify`,
-          });
-        }
-        else if (!hasPO && isVerbal) {
-          flags.push({
-            severity: 'low',
-            kind: 'hygiene',
-            reason: 'Verbal approval · chase PO from client',
+            reason: `PO ${fmtForFlag(poAmt)} ≠ job ${fmtForFlag(r.gt)}`,
           });
         }
       }
