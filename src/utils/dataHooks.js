@@ -1774,58 +1774,321 @@ export function useInetData(data) {
   }, [data]);
 }
 
-// ── RELATIONSHIPS ────────────────────────────────────────────
+// ── RELATIONSHIPS — PM-centric, channel-agnostic ─────────────
+// Goal: spot cooling/heating PMs early; suggest pricing posture for live quoting.
+// Combines non-INET orders and INET records into one PM-level dataset.
 export function useRelationshipData(data) {
   return useMemo(() => {
     if (!data) return null;
-    const { contacts, prospects, orders } = data;
+    const { orders, installnet, invoices, contacts, prospects } = data;
 
-    const postOrders = orders.filter(r => r.yearBucket==='Year 1'||r.yearBucket==='Year 2');
-    const lastQuoteByCompany = {};
-    const postCountByCompany = {};
-    postOrders.forEach(r => {
-      if (!lastQuoteByCompany[r.customer] || r.created_date > lastQuoteByCompany[r.customer])
-        lastQuoteByCompany[r.customer] = r.created_date;
-      postCountByCompany[r.customer] = (postCountByCompany[r.customer] || 0) + 1;
+    const today = new Date(TODAY);
+    today.setHours(0, 0, 0, 0);
+    const ms = 86400000;
+    const days = (n) => new Date(today - n * ms);
+
+    const parseDate = (v) => {
+      if (!v) return null;
+      const d = new Date(v);
+      return isNaN(d) ? null : d;
+    };
+
+    // ── BUILD UNIFIED PM RECORDS ─────────────────────────────
+    // Each PM gets one record with ALL their quotes (non-INET + INET) merged.
+    const pmMap = {};
+
+    // Helper to ensure PM record exists
+    const getPM = (pm, dealer) => {
+      if (!pm) return null;
+      if (!pmMap[pm]) {
+        pmMap[pm] = {
+          pm,
+          dealer,
+          channels: new Set(),
+          quotes: [], // unified shape: {orderNum, dealer, channel, date, value, status, isWon, isLost, isOpen, isDecided}
+        };
+      }
+      return pmMap[pm];
+    };
+
+    // Add non-INET orders (formal quotes only — has lqp_start_date — to be consistent with momentum elsewhere)
+    orders.filter(r => !r.isInet && r.pm).forEach(r => {
+      const p = getPM(r.pm, r.customer);
+      if (!p) return;
+      p.channels.add('Non-INET');
+      p.quotes.push({
+        orderNum: r.order_number,
+        order_name: r.order_name,
+        dealer: r.customer,
+        channel: 'Non-INET',
+        date: parseDate(r.created_date),
+        value: r.gt,
+        status: r.status,
+        isWon: r.isWon,
+        isLost: r.isLost,
+        isOpen: r.isOpen,
+        isDecided: r.isDecided,
+        isFormal: r.isFormalQuote,
+        raw: r,
+      });
     });
-    const preOrders = orders.filter(r => r.yearBucket === 'Pre-acquisition');
-    const preCountByCompany = {};
-    preOrders.forEach(r => {
-      preCountByCompany[r.customer] = (preCountByCompany[r.customer] || 0) + 1;
+
+    // Add INET records
+    installnet.filter(r => r.pm).forEach(r => {
+      const p = getPM(r.pm, 'INSTALL Net');
+      if (!p) return;
+      p.channels.add('INET');
+      p.quotes.push({
+        orderNum: r.project_id,
+        order_name: r.project_name,
+        dealer: 'INSTALL Net',
+        channel: 'INET',
+        date: parseDate(r.date_requested),
+        value: r.price,
+        status: r.sp_bid_status,
+        isWon: r.isWonComplete,
+        isLost: r.isSpLost,
+        isOpen: r.isOpenPipeline,
+        isDecided: r.isDecided,
+        isFormal: true,
+        raw: r,
+      });
     });
 
-    const enrichedContacts = contacts.map(r => {
-      const lastDate = lastQuoteByCompany[r.company];
-      const daysSince = lastDate ? Math.floor((TODAY - new Date(lastDate)) / 86400000) : null;
-      const post = postCountByCompany[r.company] || 0;
-      const pre  = preCountByCompany[r.company] || 0;
-      let status = 'Inactive';
-      if (post >= 5 && (daysSince||0) > 21) status = 'Going cold';
-      else if (post >= 1 && pre >= 5 && post < pre * 0.3) status = 'Rebuilding';
-      else if (post < 3 && pre >= 5) status = 'Reactivation target';
-      else if (post >= 3) status = 'Active';
-      return { ...r, post_acq_quotes:post, pre_acq_quotes:pre,
-        last_quote_date:lastDate||null, days_since_last_quote:daysSince,
-        relationship_status:status };
+    // ── COMPUTE PER-PM METRICS ───────────────────────────────
+    const cutoff30 = days(30);
+    const cutoff60 = days(60);
+    const cutoff90 = days(90);
+    const cutoff14 = days(14);
+
+    const pmList = Object.values(pmMap)
+      .filter(p => p.quotes.length >= 1) // include everyone with at least 1 quote
+      .map(p => {
+        // Sort quotes by date desc
+        const quotesWithDate = p.quotes.filter(q => q.date).sort((a, b) => b.date - a.date);
+        const lastQuote = quotesWithDate[0]?.date || null;
+        const firstQuote = quotesWithDate.length > 0 ? quotesWithDate[quotesWithDate.length - 1].date : null;
+        const daysSinceLastQuote = lastQuote ? Math.floor((today - lastQuote) / ms) : null;
+        const tenureMonths = firstQuote ? Math.floor((today - firstQuote) / ms / 30) : 0;
+
+        // Volume metrics
+        const totalQuotes = p.quotes.length;
+        const last30 = p.quotes.filter(q => q.date && q.date >= cutoff30);
+        const prior30 = p.quotes.filter(q => q.date && q.date >= cutoff60 && q.date < cutoff30);
+        const last30Count = last30.length;
+        const prior30Count = prior30.length;
+
+        // Lifetime monthly average for personal baseline
+        const monthsActive = Math.max(1, tenureMonths);
+        const lifetimeMonthly = totalQuotes / monthsActive;
+
+        // Standard deviation of monthly volume — for cooling detection
+        // Bucket all quotes by month to compute SD
+        const monthlyBuckets = {};
+        quotesWithDate.forEach(q => {
+          const k = `${q.date.getFullYear()}-${String(q.date.getMonth() + 1).padStart(2, '0')}`;
+          monthlyBuckets[k] = (monthlyBuckets[k] || 0) + 1;
+        });
+        const monthCounts = Object.values(monthlyBuckets);
+        let monthlySD = 0;
+        if (monthCounts.length >= 3) {
+          const mean = monthCounts.reduce((s, v) => s + v, 0) / monthCounts.length;
+          const variance = monthCounts.reduce((s, v) => s + (v - mean) ** 2, 0) / monthCounts.length;
+          monthlySD = Math.sqrt(variance);
+        }
+
+        // CR (lifetime, decided)
+        const decided = p.quotes.filter(q => q.isDecided);
+        const won = decided.filter(q => q.isWon);
+        const lifetimeCR = decided.length > 0 ? won.length / decided.length : null;
+
+        // Recent CR (L90 decided)
+        const decidedL90 = p.quotes.filter(q => q.isDecided && q.date && q.date >= cutoff90);
+        const wonL90 = decidedL90.filter(q => q.isWon);
+        const recentCR = decidedL90.length >= 5 ? wonL90.length / decidedL90.length : null;
+        const crEroded = recentCR !== null && lifetimeCR !== null &&
+                        decided.length >= 15 && (lifetimeCR - recentCR) > 0.15;
+
+        // Avg quote value
+        const avgValue = totalQuotes > 0 ? p.quotes.reduce((s, q) => s + q.value, 0) / totalQuotes : 0;
+
+        // Revenue won
+        const revenueWon = won.reduce((s, q) => s + q.value, 0);
+
+        // Open quotes
+        const openQuotes = p.quotes.filter(q => q.isOpen);
+
+        // ── STATUS CLASSIFICATION ──────────────────────────────
+        // - cold: 14+ days silent AND has 3+ historical quotes
+        // - new: <6 months tenure
+        // - cooling: established (10+ quotes, 6+ months) AND L30 below baseline
+        //          AND prior 30 also below baseline (sustained slowdown)
+        // - hot: established AND L30 above baseline+SD
+        // - steady: everything else with established history
+        let status = 'steady';
+        const hasMinHistory = totalQuotes >= 3;
+        const isEstablished = totalQuotes >= 10 && tenureMonths >= 6;
+        const isNew = tenureMonths < 6;
+
+        if (daysSinceLastQuote !== null && daysSinceLastQuote >= 14 && hasMinHistory) {
+          status = 'cold';
+        } else if (isNew && totalQuotes >= 1) {
+          status = 'new';
+        } else if (isEstablished && monthlySD > 0) {
+          // Sustained slowdown: both last 30 AND prior 30 below baseline
+          const lowThreshold = lifetimeMonthly - monthlySD;
+          if (last30Count < lowThreshold && prior30Count < lowThreshold) {
+            status = 'cooling';
+          }
+          // Heating: last 30 above baseline + SD
+          else if (last30Count > lifetimeMonthly + monthlySD) {
+            status = 'hot';
+          }
+        }
+
+        // ── SUGGESTED PRICING POSTURE ──────────────────────────
+        // Aggressive: cold, cooling, eroding CR, OR new+heating (capture wave)
+        // Premium: established + CR ≥ baseline + steady or hot
+        // Market: everything else
+        let suggestedPricing = 'Market';
+        let pricingReason = '';
+        if (status === 'cold' || status === 'cooling' || crEroded) {
+          suggestedPricing = 'Aggressive';
+          pricingReason = status === 'cold'
+            ? `Cold for ${daysSinceLastQuote}d · sharpen pricing to restart momentum`
+            : status === 'cooling'
+            ? 'Velocity below baseline · sharpen to rebuild rhythm'
+            : 'CR has eroded · price competitively to win back';
+        } else if (status === 'new' && totalQuotes >= 2) {
+          suggestedPricing = 'Aggressive';
+          pricingReason = 'Newer relationship · capture the wave, raise rates as trust builds';
+        } else if (isEstablished && lifetimeCR !== null && lifetimeCR >= 0.5 && (status === 'steady' || status === 'hot')) {
+          suggestedPricing = 'Premium';
+          pricingReason = `Strong relationship · ${Math.round(lifetimeCR * 100)}% CR over ${totalQuotes} quotes · they trust us`;
+        } else {
+          suggestedPricing = 'Market';
+          pricingReason = 'Standard relationship · price at market';
+        }
+
+        // ── RECENTLY WON / LOST / OPEN (top 5 by date) ─────────
+        const recentlyWon = quotesWithDate.filter(q => q.isWon).slice(0, 5);
+        const recentlyLost = quotesWithDate.filter(q => q.isLost).slice(0, 5);
+        const recentOpen = openQuotes
+          .filter(q => q.date)
+          .sort((a, b) => b.date - a.date)
+          .slice(0, 5);
+
+        return {
+          pm: p.pm,
+          dealer: p.dealer,
+          channels: Array.from(p.channels),
+          totalQuotes,
+          last30Count,
+          prior30Count,
+          velocityDelta: last30Count - prior30Count,
+          lastQuoteDate: lastQuote,
+          daysSinceLastQuote,
+          tenureMonths,
+          lifetimeMonthly,
+          monthlySD,
+          lifetimeCR,
+          recentCR,
+          crEroded,
+          avgValue: Math.round(avgValue),
+          revenueWon: Math.round(revenueWon),
+          openCount: openQuotes.length,
+          openValue: Math.round(openQuotes.reduce((s, q) => s + q.value, 0)),
+          status,
+          suggestedPricing,
+          pricingReason,
+          recentlyWon,
+          recentlyLost,
+          recentOpen,
+          allQuotes: quotesWithDate,
+        };
+      });
+
+    // ── ALERT LISTS ──────────────────────────────────────────
+    // Each list: sorted by revenue impact desc (most valuable PMs first)
+    const goingCold = pmList.filter(p => p.status === 'cold')
+      .sort((a, b) => b.revenueWon - a.revenueWon);
+    const cooling = pmList.filter(p => p.status === 'cooling')
+      .sort((a, b) => b.revenueWon - a.revenueWon);
+    const heatingUp = pmList.filter(p => p.status === 'hot')
+      .sort((a, b) => b.revenueWon - a.revenueWon);
+
+    // ── SINGLE-PM DEALERS (sourcing prompt) ──────────────────
+    // Active dealers (>= $25K Y1+Y2 revenue AND 3+ won jobs) where you only have 1 PM
+    const dealerStats = {};
+    orders.filter(r => !r.isInet && r.pm && r.customer &&
+      (r.yearBucket === 'Year 1' || r.yearBucket === 'Year 2')).forEach(r => {
+      if (!dealerStats[r.customer]) {
+        dealerStats[r.customer] = { dealer: r.customer, pms: new Set(), wonRev: 0, wonCount: 0 };
+      }
+      dealerStats[r.customer].pms.add(r.pm);
+      if (r.isWon) {
+        dealerStats[r.customer].wonRev += r.gt;
+        dealerStats[r.customer].wonCount += 1;
+      }
     });
 
-    const goingCold = enrichedContacts.filter(r=>r.relationship_status==='Going cold')
-      .sort((a,b)=>(b.days_since_last_quote||0)-(a.days_since_last_quote||0));
-    const rebuilding = enrichedContacts.filter(r=>r.relationship_status==='Rebuilding');
-    const reactivation = enrichedContacts.filter(r=>r.relationship_status==='Reactivation target');
+    const singlePMDealers = Object.values(dealerStats)
+      .filter(d => d.pms.size === 1 && d.wonRev >= 25000 && d.wonCount >= 3)
+      .map(d => ({
+        dealer: d.dealer,
+        pm: Array.from(d.pms)[0],
+        wonRev: Math.round(d.wonRev),
+        wonCount: d.wonCount,
+      }))
+      .sort((a, b) => b.wonRev - a.wonRev);
 
-    const cutoff = new Date(TODAY - 90*86400000).toISOString().slice(0,10);
-    const firstByDealer = {};
+    // ── NEW SOURCES (last 90 days) ───────────────────────────
+    // First-ever quote from this PM in our data — within last 90d
+    const pmFirstSeen = {};
     orders.forEach(r => {
-      if (!firstByDealer[r.customer] || r.created_date < firstByDealer[r.customer])
-        firstByDealer[r.customer] = r.created_date;
+      if (!r.pm) return;
+      const d = parseDate(r.created_date);
+      if (!d) return;
+      if (!pmFirstSeen[r.pm] || d < pmFirstSeen[r.pm].date) {
+        pmFirstSeen[r.pm] = { date: d, dealer: r.customer };
+      }
     });
-    const newDealers = Object.entries(firstByDealer)
-      .filter(([,d]) => d >= cutoff)
-      .map(([dealer,date]) => ({ dealer, date }))
-      .sort((a,b) => b.date.localeCompare(a.date));
+    installnet.forEach(r => {
+      if (!r.pm) return;
+      const d = parseDate(r.date_requested);
+      if (!d) return;
+      if (!pmFirstSeen[r.pm] || d < pmFirstSeen[r.pm].date) {
+        pmFirstSeen[r.pm] = { date: d, dealer: 'INSTALL Net' };
+      }
+    });
 
-    return { goingCold, rebuilding, reactivation, enrichedContacts,
-      prospectList:prospects||[], newDealers };
+    const newSources = Object.entries(pmFirstSeen)
+      .filter(([, info]) => info.date >= cutoff90)
+      .map(([pm, info]) => {
+        const pmRecord = pmMap[pm];
+        return {
+          pm,
+          dealer: info.dealer,
+          firstDate: info.date.toISOString().slice(0, 10),
+          quoteCount: pmRecord ? pmRecord.quotes.length : 0,
+        };
+      })
+      .sort((a, b) => b.firstDate.localeCompare(a.firstDate));
+
+    return {
+      pmList: pmList.sort((a, b) => b.totalQuotes - a.totalQuotes),
+      goingCold,
+      cooling,
+      heatingUp,
+      singlePMDealers,
+      newSources,
+      // Legacy (kept for any other consumers)
+      goingColdLegacy: [],
+      rebuilding: [],
+      reactivation: [],
+      enrichedContacts: contacts || [],
+      prospectList: prospects || [],
+      newDealers: newSources, // alias for backward compat
+    };
   }, [data]);
 }

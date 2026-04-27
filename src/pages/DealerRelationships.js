@@ -1,175 +1,562 @@
-import React, { useState } from 'react';
-import { Card, CardTitle, SectionLabel, Grid, Alert, Badge, Table, Modal, DetailRow, Insight, FreqArrow, CRBadge, C } from '../components/UI';
-import { useDealerData } from '../utils/dataHooks';
-import { fmtCurrency, fmtPct, parseNum } from '../utils/sheets';
+import React, { useState, useMemo } from 'react';
+import { Card, SectionLabel, Grid, Badge, Table, Modal, DetailRow, Insight, C } from '../components/UI';
+import { useRelationshipData } from '../utils/dataHooks';
+import { fmtCurrency } from '../utils/sheets';
+
+// ─────────────────────────────────────────────────────────────
+// Dealer Relationships — PM-centric, channel-agnostic
+// Goal: spot cooling/heating PMs early; suggest pricing posture for live quoting.
+// Three sections: Action list (3 tabs) → PM Scorecard (lookup table) → Single-PM dealers + New sources
+// ─────────────────────────────────────────────────────────────
+
+function formatPM(pm) {
+  if (!pm) return '—';
+  return String(pm).split(' ').map(w =>
+    w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
+  ).join(' ');
+}
+
+function fmtLastQuote(daysAgo, date) {
+  if (daysAgo === null || daysAgo === undefined) return '—';
+  if (daysAgo < 30) return `${daysAgo}d ago`;
+  if (!date) return `${daysAgo}d ago`;
+  const d = new Date(date);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function fmtDate(d) {
+  if (!d) return '—';
+  const dt = new Date(d);
+  if (isNaN(dt)) return '—';
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+}
+
+// Status badge with color
+function StatusBadge({ status }) {
+  const map = {
+    cold: { type: 'red', label: 'Cold' },
+    cooling: { type: 'amber', label: 'Cooling' },
+    new: { type: 'blue', label: 'New' },
+    hot: { type: 'green', label: 'Hot' },
+    steady: { type: 'gray', label: 'Steady' },
+  };
+  const cfg = map[status] || { type: 'gray', label: status };
+  return <Badge type={cfg.type}>{cfg.label}</Badge>;
+}
+
+// Suggested pricing badge
+function PricingBadge({ pricing }) {
+  const map = {
+    Aggressive: { bg: '#FAEEDA', color: '#412402' },
+    Premium: { bg: '#E1F5EE', color: '#04342C' },
+    Market: { bg: '#F1EFE8', color: '#2C2C2A' },
+  };
+  const cfg = map[pricing] || map.Market;
+  return (
+    <span style={{
+      fontSize: 10, padding: '3px 8px',
+      background: cfg.bg, color: cfg.color,
+      borderRadius: 3, fontWeight: 600,
+      whiteSpace: 'nowrap',
+    }}>{pricing}</span>
+  );
+}
+
+// Channel badge (small)
+function ChannelBadge({ channels }) {
+  if (!channels || channels.length === 0) return null;
+  if (channels.includes('INET') && channels.length === 1) {
+    return (
+      <span style={{
+        fontSize: 9, padding: '1px 5px', background: '#EEEDFE',
+        color: '#26215C', borderRadius: 3, fontWeight: 600,
+      }}>INET</span>
+    );
+  }
+  if (channels.includes('Non-INET') && channels.length === 1) {
+    return null; // non-INET is the default, no badge needed
+  }
+  // Mixed: both
+  return (
+    <span style={{
+      fontSize: 9, padding: '1px 5px', background: '#EEEDFE',
+      color: '#26215C', borderRadius: 3, fontWeight: 600,
+    }}>+ INET</span>
+  );
+}
+
+// Velocity delta (last 30 vs prior 30)
+function VelocityDelta({ last, prior }) {
+  const arrow = last > prior ? '↑' : last < prior ? '↓' : '→';
+  const color = last > prior ? C.green : last < prior ? C.red : C.textMuted;
+  return (
+    <span style={{ fontSize: 11, color: C.textSub }}>
+      {prior} → {last} <span style={{ color, fontWeight: 600 }}>{arrow}</span>
+    </span>
+  );
+}
 
 export default function DealerRelationships({ data }) {
-  const d = useDealerData(data);
-  const [selected, setSelected] = useState(null);
+  const d = useRelationshipData(data);
+  const [actionTab, setActionTab] = useState('cold');
+  const [channelFilter, setChannelFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [searchText, setSearchText] = useState('');
   const [selectedPM, setSelectedPM] = useState(null);
+  const [selectedQuote, setSelectedQuote] = useState(null);
+
+  const filteredPMs = useMemo(() => {
+    if (!d) return [];
+    return d.pmList.filter(p => {
+      if (channelFilter !== 'all') {
+        if (channelFilter === 'inet' && !p.channels.includes('INET')) return false;
+        if (channelFilter === 'noninet' && !p.channels.includes('Non-INET')) return false;
+      }
+      if (statusFilter !== 'all' && p.status !== statusFilter) return false;
+      if (searchText.trim()) {
+        const q = searchText.toLowerCase();
+        if (!p.pm.toLowerCase().includes(q) && !(p.dealer || '').toLowerCase().includes(q)) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [d, channelFilter, statusFilter, searchText]);
 
   if (!d) return null;
 
-  const goingCold = d.pmList.filter(p => p.status === 'cold' || p.status === 'watch');
-  const newSources = d.newSources;
-
-  const companyQuotes = selected
-    ? data.orders.filter(r => r.customer === selected && ['Year 1','Year 2'].includes(r.year_bucket))
-        .sort((a,b) => new Date(b.created_date)-new Date(a.created_date)).slice(0,20)
-    : [];
-
-  const Q_LABELS = ["Q2 '25","Q3 '25","Q4 '25","Q1 '26","Q2 '26"];
+  // Action list: get rows for current tab
+  const actionRows =
+    actionTab === 'cold' ? d.goingCold :
+    actionTab === 'cooling' ? d.cooling :
+    d.heatingUp;
 
   return (
-    <div style={{ padding:'20px 24px', maxWidth:1320, margin:'0 auto' }}>
-      <h2 style={{ fontSize:18, fontWeight:700, color:C.text, marginBottom:4 }}>Dealer relationships — non-INET</h2>
-      <p style={{ fontSize:12, color:C.textSub, marginBottom:12 }}>PM velocity · concentration · new sources · click any row for detail</p>
+    <div style={{ padding: '20px 24px', maxWidth: 1320, margin: '0 auto' }}>
+      <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text, marginBottom: 4 }}>Dealer relationships</h2>
+      <p style={{ fontSize: 12, color: C.textSub, marginBottom: 18 }}>
+        PMs and dealers across all channels · use mid-quote to gauge pricing posture · click any row for history
+      </p>
 
-      <Grid cols={4} gap={10} style={{ marginBottom:12 }}>
-        {[
-          { label:'Active PMs this quarter', value:`${d.pmList.filter(p=>p.status==='active').length}`, sub:'Sent a quote in last 21 days', color:C.green },
-          { label:'New sources (last 90d)', value:`${newSources.length}`, sub:'New PM / dealer combinations', color:C.purple },
-          { label:'PMs going cold', value:`${goingCold.length}`, sub:'No quote in 45+ days', color:goingCold.length>0?C.red:C.text },
-          { label:'Avg quotes / PM / month', value:'3.2 ↑', sub:'vs 2.8 last quarter' },
-        ].map((m,i) => (
-          <div key={i} style={{ background:'#f0f2f5', borderRadius:8, padding:'12px 14px' }}>
-            <div style={{ fontSize:11, color:C.textSub, marginBottom:3 }}>{m.label}</div>
-            <div style={{ fontSize:20, fontWeight:600, color:m.color||C.text }}>{m.value}</div>
-            <div style={{ fontSize:11, color:C.textMuted }}>{m.sub}</div>
+      {/* ── ACTION LIST ───────────────────────────────────────────────── */}
+      <SectionLabel>Action list — PMs that need attention</SectionLabel>
+      <Card style={{ marginBottom: 16 }}>
+        {/* Three stat cards / tab switchers */}
+        <Grid cols={3} gap={10} style={{ marginBottom: 14 }}>
+          <ActionStatCard
+            label="Going cold"
+            count={d.goingCold.length}
+            sub="No quote in 14+ days"
+            color={C.red}
+            active={actionTab === 'cold'}
+            onClick={() => setActionTab('cold')}
+          />
+          <ActionStatCard
+            label="Cooling"
+            count={d.cooling.length}
+            sub="Velocity below personal baseline"
+            color={C.amber}
+            active={actionTab === 'cooling'}
+            onClick={() => setActionTab('cooling')}
+          />
+          <ActionStatCard
+            label="Heating up"
+            count={d.heatingUp.length}
+            sub="Velocity above personal baseline"
+            color={C.green}
+            active={actionTab === 'hot'}
+            onClick={() => setActionTab('hot')}
+          />
+        </Grid>
+
+        {actionRows.length === 0 ? (
+          <div style={{ padding: '20px 0', textAlign: 'center', fontSize: 12, color: C.textMuted }}>
+            {actionTab === 'cold' && 'No PMs going cold. Good.'}
+            {actionTab === 'cooling' && 'No PMs cooling off. Quote velocity is healthy.'}
+            {actionTab === 'hot' && 'No PMs heating up right now. Watch this space.'}
           </div>
-        ))}
-      </Grid>
-
-      {goingCold.length > 0 && (
-        <Alert type="amber"><strong>{goingCold.length} PM{goingCold.length>1?'s':''} going cold:</strong> {goingCold.slice(0,3).map(p=>p.label).join(', ')}{goingCold.length>3?` and ${goingCold.length-3} more`:''} — no quote in 45+ days.</Alert>
-      )}
-
-      <SectionLabel>PM velocity scorecard — frequency · value · close rate · click for history</SectionLabel>
-      <Card style={{ marginBottom:12 }}>
-        <div style={{ overflowX:'auto' }}>
-          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
-            <thead>
-              <tr style={{ borderBottom:`0.5px solid ${C.border}` }}>
-                {['PM / Dealer','Q/mo trend','Avg value','CR overall',...Q_LABELS,'Last quote','Status'].map(h=>(
-                  <th key={h} style={{ textAlign:'left', fontSize:10, fontWeight:600, color:C.textMuted, padding:'4px 8px 8px 0', whiteSpace:'nowrap' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {d.pmList.map((pm,ri) => (
-                <tr key={ri}
-                  onClick={() => setSelectedPM(pm)}
-                  style={{ background:ri%2===1?'#fafafa':'transparent', cursor:'pointer' }}
-                  onMouseEnter={e=>e.currentTarget.style.background='#f0f7ff'}
-                  onMouseLeave={e=>e.currentTarget.style.background=ri%2===1?'#fafafa':'transparent'}>
-                  <td style={{ padding:'6px 8px 6px 0', borderBottom:`0.5px solid ${C.border}`, fontWeight:500, color:C.text, maxWidth:160, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                    {pm.label}
-                  </td>
-                  <td style={{ padding:'6px 8px', borderBottom:`0.5px solid ${C.border}`, textAlign:'center' }}><FreqArrow trend={pm.freqTrend}/></td>
-                  <td style={{ padding:'6px 8px', borderBottom:`0.5px solid ${C.border}` }}>{fmtCurrency(pm.avgValue)}</td>
-                  <td style={{ padding:'6px 8px', borderBottom:`0.5px solid ${C.border}` }}><CRBadge value={pm.overallCR}/></td>
-                  {pm.qCRs.map((q,i) => (
-                    <td key={i} style={{ padding:'6px 8px', borderBottom:`0.5px solid ${C.border}`, textAlign:'center',
-                      color:q===null?C.textMuted:q>=0.7?C.green:q>=0.45?C.amberTxt:C.red, fontWeight:500 }}>
-                      {q!==null?fmtPct(q):'—'}
-                    </td>
-                  ))}
-                  <td style={{ padding:'6px 8px', borderBottom:`0.5px solid ${C.border}`, color:C.textMuted }}>
-                    {pm.daysSince!==null?`${pm.daysSince}d ago`:'—'}
-                  </td>
-                  <td style={{ padding:'6px 8px', borderBottom:`0.5px solid ${C.border}` }}>
-                    <Badge type={pm.status==='active'?'green':pm.status==='watch'?'amber':'red'}>{pm.status}</Badge>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <Insight>Frequency trend = direction of quote volume over last 3 quarters. High freq + low CR = price-checking pattern. Declining freq + high CR = relationship cooling before revenue drops.</Insight>
+        ) : (
+          <Table
+            cols={[
+              { key: 'pm', label: 'PM / Dealer', width: '26%',
+                render: (_, r) => (
+                  <span style={{ fontSize: 12 }}>
+                    <span style={{ fontWeight: 600 }}>{formatPM(r.pm)}</span>
+                    <br />
+                    <span style={{ color: C.textSub, fontSize: 11 }}>
+                      {r.dealer} · {fmtCurrency(r.avgValue)} avg
+                    </span>
+                  </span>
+                ) },
+              { key: 'totalQuotes', label: 'Lifetime', width: '14%',
+                render: (_, r) => (
+                  <span style={{ fontSize: 11 }}>
+                    {r.totalQuotes} quotes
+                    <br />
+                    <span style={{ color: C.textSub, fontSize: 10 }}>
+                      {fmtCurrency(r.revenueWon)} won
+                    </span>
+                  </span>
+                ) },
+              { key: 'daysSinceLastQuote', label: 'Last quote', width: '12%',
+                render: (v, r) => (
+                  <span style={{ fontSize: 11,
+                    color: r.status === 'cold' ? C.red : C.textSub }}>
+                    {fmtLastQuote(v, r.lastQuoteDate)}
+                  </span>
+                ) },
+              { key: 'velocityDelta', label: 'Last 30d vs prior', width: '15%',
+                render: (_, r) => <VelocityDelta last={r.last30Count} prior={r.prior30Count} /> },
+              { key: 'whatChanged', label: 'What changed', width: '23%',
+                render: (_, r) => (
+                  <span style={{ fontSize: 11, color: C.textSub }}>
+                    {whatChangedText(r)}
+                  </span>
+                ) },
+              { key: 'suggestedPricing', label: 'Suggested pricing', width: '10%',
+                render: v => <PricingBadge pricing={v} /> },
+            ]}
+            rows={actionRows}
+            onRowClick={setSelectedPM}
+          />
+        )}
+        <Insight>
+          Click any row for full history, recent wins/losses, and open quotes. &ldquo;What changed&rdquo; describes the velocity shift compared to this PM&rsquo;s personal baseline.
+        </Insight>
       </Card>
 
-      <SectionLabel>Dealer concentration — Year 1 revenue vs open pipeline</SectionLabel>
-      <Card style={{ marginBottom:12 }}>
-        <div style={{ display:'grid', gridTemplateColumns:'160px 70px 55px 75px 55px', fontSize:11, fontWeight:600, color:C.textMuted, padding:'0 0 6px', borderBottom:`0.5px solid ${C.border}`, gap:8, marginBottom:4 }}>
-          <span>Dealer</span><span>Yr1 revenue</span><span>Yr1 %</span><span>Open pipeline</span><span>Pipeline %</span>
+      {/* ── PM SCORECARD ──────────────────────────────────────────────── */}
+      <SectionLabel>PM scorecard — full lookup · click any row for history</SectionLabel>
+      <Card style={{ marginBottom: 16 }}>
+        {/* Filter row */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            placeholder="Filter by PM or dealer…"
+            value={searchText}
+            onChange={e => setSearchText(e.target.value)}
+            style={{
+              flex: '1 1 200px', minWidth: 180,
+              fontSize: 12, padding: '5px 10px',
+              border: `0.5px solid ${C.border}`, borderRadius: 4,
+              outline: 'none',
+            }}
+          />
+          <select
+            value={channelFilter}
+            onChange={e => setChannelFilter(e.target.value)}
+            style={{
+              fontSize: 12, padding: '5px 10px',
+              border: `0.5px solid ${C.border}`, borderRadius: 4,
+              background: '#fff', cursor: 'pointer',
+            }}
+          >
+            <option value="all">All channels</option>
+            <option value="noninet">Non-INET</option>
+            <option value="inet">INET</option>
+          </select>
+          <select
+            value={statusFilter}
+            onChange={e => setStatusFilter(e.target.value)}
+            style={{
+              fontSize: 12, padding: '5px 10px',
+              border: `0.5px solid ${C.border}`, borderRadius: 4,
+              background: '#fff', cursor: 'pointer',
+            }}
+          >
+            <option value="all">All statuses</option>
+            <option value="hot">Hot</option>
+            <option value="steady">Steady</option>
+            <option value="cooling">Cooling</option>
+            <option value="cold">Cold</option>
+            <option value="new">New</option>
+          </select>
+          <span style={{ fontSize: 11, color: C.textMuted, marginLeft: 'auto' }}>
+            {filteredPMs.length} of {d.pmList.length} PMs
+          </span>
         </div>
-        {d.dealerConc.map((c,i) => (
-          <div key={i} onClick={()=>setSelected(c.dealer)}
-            style={{ display:'grid', gridTemplateColumns:'160px 70px 55px 75px 55px', fontSize:11, padding:'5px 0', borderBottom:`0.5px solid ${C.border}`, gap:8, alignItems:'center', cursor:'pointer' }}
-            onMouseEnter={e=>e.currentTarget.style.background='#f0f7ff'}
-            onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
-            <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', color:C.text }}>{c.dealer}</span>
-            <span>{fmtCurrency(c.rev)}</span>
-            <span><Badge type={c.revPct>0.2?'red':'gray'}>{fmtPct(c.revPct)}</Badge></span>
-            <span>{fmtCurrency(c.pipeVal)}</span>
-            <span style={{ color:C.textSub }}>{fmtPct(c.pipePct)}</span>
+
+        {filteredPMs.length === 0 ? (
+          <div style={{ padding: '20px 0', textAlign: 'center', fontSize: 12, color: C.textMuted }}>
+            No PMs match the filters.
           </div>
-        ))}
+        ) : (
+          <Table
+            cols={[
+              { key: 'pm', label: 'PM / Dealer', width: '23%',
+                render: (_, r) => (
+                  <span style={{ fontSize: 12 }}>
+                    <span style={{ fontWeight: 600 }}>{formatPM(r.pm)}</span>
+                    {' '}<ChannelBadge channels={r.channels} />
+                    <br />
+                    <span style={{ color: C.textSub, fontSize: 11 }}>{r.dealer}</span>
+                  </span>
+                ) },
+              { key: 'totalQuotes', label: 'Total', width: '8%',
+                render: v => <span style={{ fontSize: 11 }}>{v}</span> },
+              { key: 'velocityDelta', label: 'Last 30d vs prior', width: '15%',
+                render: (_, r) => <VelocityDelta last={r.last30Count} prior={r.prior30Count} /> },
+              { key: 'avgValue', label: 'Avg $', width: '9%',
+                render: v => <span style={{ fontSize: 11 }}>{fmtCurrency(v)}</span> },
+              { key: 'lifetimeCR', label: 'CR', width: '10%',
+                render: (v, r) => v !== null
+                  ? <span style={{ fontSize: 11 }}>
+                      {Math.round(v * 100)}%
+                      {r.crEroded && <span style={{ color: C.red, marginLeft: 3 }}>↓</span>}
+                    </span>
+                  : <span style={{ fontSize: 11, color: C.textMuted }}>—</span> },
+              { key: 'daysSinceLastQuote', label: 'Last quote', width: '10%',
+                render: (v, r) => (
+                  <span style={{ fontSize: 11,
+                    color: r.status === 'cold' ? C.red : C.textSub }}>
+                    {fmtLastQuote(v, r.lastQuoteDate)}
+                  </span>
+                ) },
+              { key: 'status', label: 'Status', width: '11%',
+                render: v => <StatusBadge status={v} /> },
+              { key: 'suggestedPricing', label: 'Suggested pricing', width: '14%',
+                render: v => <PricingBadge pricing={v} /> },
+            ]}
+            rows={filteredPMs}
+            onRowClick={setSelectedPM}
+            defaultSort={{ key: 'totalQuotes', dir: 'desc' }}
+          />
+        )}
       </Card>
 
+      {/* ── SINGLE-PM DEALERS ─────────────────────────────────────────── */}
+      <SectionLabel>Single-PM dealers — sourcing prompts</SectionLabel>
+      <Card style={{ marginBottom: 16 }}>
+        <p style={{ fontSize: 12, color: C.textSub, marginTop: 0, marginBottom: 10 }}>
+          Active dealers (≥$25K won, 3+ jobs) where you only have 1 PM relationship — opportunities to expand. Schedule a meeting.
+        </p>
+        {d.singlePMDealers.length === 0 ? (
+          <div style={{ padding: '20px 0', textAlign: 'center', fontSize: 12, color: C.textMuted }}>
+            No single-PM dealers meet the threshold yet.
+          </div>
+        ) : (
+          <Table
+            cols={[
+              { key: 'dealer', label: 'Dealer', width: '40%',
+                render: v => <span style={{ fontWeight: 600 }}>{v}</span> },
+              { key: 'pm', label: 'Your only PM', width: '30%',
+                render: v => formatPM(v) },
+              { key: 'wonRev', label: 'Won revenue', width: '15%',
+                render: v => fmtCurrency(v) },
+              { key: 'wonCount', label: 'Jobs won', width: '15%' },
+            ]}
+            rows={d.singlePMDealers}
+            defaultSort={{ key: 'wonRev', dir: 'desc' }}
+          />
+        )}
+      </Card>
+
+      {/* ── NEW SOURCES ───────────────────────────────────────────────── */}
       <SectionLabel>New sources — last 90 days</SectionLabel>
-      <Card>
-        <Table cols={[
-          { key:'pm', label:'PM', width:'30%' },
-          { key:'dealer', label:'Dealer', width:'35%' },
-          { key:'date', label:'First quote', width:'20%' },
-          { key:'type', label:'Type', width:'15%', render:(_,row)=><Badge type="purple">new PM</Badge> },
-        ]} rows={newSources} />
-        <Insight>New PMs at existing dealers = sales effort working. New dealers = network expanding. Both tracked here.</Insight>
+      <Card style={{ marginBottom: 16 }}>
+        {d.newSources.length === 0 ? (
+          <div style={{ padding: '20px 0', textAlign: 'center', fontSize: 12, color: C.textMuted }}>
+            No new PMs in the last 90 days.
+          </div>
+        ) : (
+          <Table
+            cols={[
+              { key: 'pm', label: 'PM', width: '30%', render: v => formatPM(v) },
+              { key: 'dealer', label: 'Dealer', width: '30%' },
+              { key: 'firstDate', label: 'First quote', width: '20%' },
+              { key: 'quoteCount', label: 'Quotes since', width: '20%' },
+            ]}
+            rows={d.newSources}
+            onRowClick={r => {
+              const pm = d.pmList.find(p => p.pm === r.pm);
+              if (pm) setSelectedPM(pm);
+            }}
+            defaultSort={{ key: 'firstDate', dir: 'desc' }}
+          />
+        )}
       </Card>
 
-      {/* PM detail modal */}
+      {/* ── PM DETAIL MODAL ───────────────────────────────────────────── */}
       {selectedPM && (
-        <Modal title={selectedPM.label} onClose={()=>setSelectedPM(null)}>
-          <Grid cols={3} gap={8} style={{ marginBottom:14 }}>
-            {[['Total quotes',selectedPM.totalQuotes],['Overall CR',selectedPM.overallCR!==null?fmtPct(selectedPM.overallCR):'—'],['Revenue won',fmtCurrency(selectedPM.revenue)]].map(([l,v])=>(
-              <div key={l} style={{ background:'#f5f6f8', borderRadius:8, padding:'10px 12px' }}>
-                <div style={{ fontSize:11, color:C.textSub }}>{l}</div>
-                <div style={{ fontSize:18, fontWeight:700, color:C.text }}>{v}</div>
-              </div>
-            ))}
-          </Grid>
-          <div style={{ fontSize:12, fontWeight:600, color:C.textMuted, marginBottom:8 }}>Quarterly breakdown</div>
-          {Q_LABELS.map((q,i) => (
-            <div key={q} style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', padding:'5px 0', borderBottom:`0.5px solid ${C.border}`, fontSize:13, gap:8 }}>
-              <span style={{ color:C.textSub }}>{q}</span>
-              <span style={{ color:C.textMuted }}>{selectedPM.qVols[i]} quotes</span>
-              <span style={{ fontWeight:600, color:selectedPM.qCRs[i]===null?C.textMuted:selectedPM.qCRs[i]>=0.7?C.green:selectedPM.qCRs[i]>=0.45?C.amberTxt:C.red }}>
-                {selectedPM.qCRs[i]!==null?fmtPct(selectedPM.qCRs[i]):'—'}
-              </span>
+        <Modal
+          title={`${formatPM(selectedPM.pm)} · ${selectedPM.dealer}`}
+          onClose={() => setSelectedPM(null)}
+          wide
+        >
+          {/* Header strip */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 14 }}>
+            <div style={{ fontSize: 12, color: C.textSub }}>
+              {selectedPM.totalQuotes} lifetime quotes · {selectedPM.lifetimeCR !== null ? `${Math.round(selectedPM.lifetimeCR * 100)}% CR` : 'No CR yet'} · {fmtCurrency(selectedPM.revenueWon)} revenue
+              {selectedPM.channels.length > 0 && (
+                <> · <span style={{ color: C.textMuted }}>{selectedPM.channels.join(' + ')}</span></>
+              )}
             </div>
-          ))}
-          <div style={{ marginTop:10, fontSize:12, fontWeight:600, color:C.textMuted, marginBottom:6 }}>Recent quotes</div>
-          <Table cols={[
-            { key:'order_number', label:'#', width:'12%' },
-            { key:'created_date', label:'Date', width:'20%' },
-            { key:'grand_total', label:'Value', width:'18%', render:v=>fmtCurrency(parseNum(v)) },
-            { key:'status', label:'Status', width:'50%', render:v=>{
-              const won=['Invoiced','Installation Complete','In-Progress','Approved Order','Ready to Invoice','In-Progress - Phase Break','Implementation Complete'].includes(v);
-              const lost=['Labor Quote Expired','Labor Quote Not Used'].includes(v);
-              return <Badge type={won?'green':lost?'red':'gray'}>{v?.replace('Labor Quote ','')}</Badge>;
-            }},
-          ]} rows={data.orders.filter(r=>r.pm===selectedPM.pm&&r.customer===selectedPM.dealer).sort((a,b)=>new Date(b.created_date)-new Date(a.created_date)).slice(0,10)} />
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+              <StatusBadge status={selectedPM.status} />
+              <PricingBadge pricing={selectedPM.suggestedPricing} />
+            </div>
+          </div>
+
+          {/* Why suggested */}
+          <div style={{
+            background: '#f5f6f8', borderRadius: 6, padding: '10px 12px',
+            marginBottom: 14, fontSize: 11, lineHeight: 1.5,
+          }}>
+            <span style={{ color: C.textMuted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.04em' }}>
+              Why {selectedPM.suggestedPricing.toLowerCase()}:
+            </span>
+            <span style={{ color: C.textSub }}> {selectedPM.pricingReason}</span>
+          </div>
+
+          {/* Stat strip */}
+          <Grid cols={4} gap={10} style={{ marginBottom: 14 }}>
+            <DetailMini label="Last 30d" value={`${selectedPM.last30Count} quotes`} />
+            <DetailMini label="Prior 30d" value={`${selectedPM.prior30Count} quotes`} />
+            <DetailMini label="Avg quote $" value={fmtCurrency(selectedPM.avgValue)} />
+            <DetailMini label="Open"
+              value={selectedPM.openCount > 0 ? `${selectedPM.openCount} · ${fmtCurrency(selectedPM.openValue)}` : '—'} />
+          </Grid>
+
+          {/* Recently won + lost side by side */}
+          <Grid cols={2} gap={12} style={{ marginBottom: 14 }}>
+            <div>
+              <div style={{
+                fontSize: 10, color: C.textMuted, textTransform: 'uppercase',
+                letterSpacing: '.04em', fontWeight: 600, marginBottom: 6,
+              }}>Recently won (last 5)</div>
+              {selectedPM.recentlyWon.length === 0 ? (
+                <div style={{ fontSize: 11, color: C.textMuted, padding: '6px 0' }}>None yet</div>
+              ) : (
+                selectedPM.recentlyWon.map((q, i) => (
+                  <QuoteRow key={i} quote={q} onClick={() => setSelectedQuote(q)} />
+                ))
+              )}
+            </div>
+            <div>
+              <div style={{
+                fontSize: 10, color: C.textMuted, textTransform: 'uppercase',
+                letterSpacing: '.04em', fontWeight: 600, marginBottom: 6,
+              }}>Recently lost (last 5)</div>
+              {selectedPM.recentlyLost.length === 0 ? (
+                <div style={{ fontSize: 11, color: C.textMuted, padding: '6px 0' }}>None recorded</div>
+              ) : (
+                selectedPM.recentlyLost.map((q, i) => (
+                  <QuoteRow key={i} quote={q} onClick={() => setSelectedQuote(q)} />
+                ))
+              )}
+            </div>
+          </Grid>
+
+          {/* Open quotes */}
+          {selectedPM.recentOpen.length > 0 && (
+            <div>
+              <div style={{
+                fontSize: 10, color: C.textMuted, textTransform: 'uppercase',
+                letterSpacing: '.04em', fontWeight: 600, marginBottom: 6,
+              }}>Open quotes (top 5)</div>
+              {selectedPM.recentOpen.map((q, i) => (
+                <QuoteRow key={i} quote={q} onClick={() => setSelectedQuote(q)} showAge />
+              ))}
+            </div>
+          )}
         </Modal>
       )}
 
-      {/* Company quote history modal */}
-      {selected && !selectedPM && (
-        <Modal title={selected} onClose={()=>setSelected(null)}>
-          <div style={{ fontSize:12, color:C.textSub, marginBottom:10 }}>Quote history (last 20)</div>
-          <Table cols={[
-            { key:'order_number', label:'#', width:'12%' },
-            { key:'created_date', label:'Date', width:'16%' },
-            { key:'pm', label:'PM', width:'22%' },
-            { key:'grand_total', label:'Value', width:'16%', render:v=>fmtCurrency(parseNum(v)) },
-            { key:'status', label:'Status', width:'34%', render:v=>{
-              const won=['Invoiced','Installation Complete','In-Progress','Approved Order','Ready to Invoice','In-Progress - Phase Break','Implementation Complete'].includes(v);
-              const lost=['Labor Quote Expired','Labor Quote Not Used'].includes(v);
-              return <Badge type={won?'green':lost?'red':'gray'}>{v?.replace('Labor Quote ','')}</Badge>;
-            }},
-          ]} rows={companyQuotes} />
+      {/* ── QUOTE DETAIL MODAL ────────────────────────────────────────── */}
+      {selectedQuote && (
+        <Modal
+          title={`Order #${selectedQuote.orderNum}`}
+          onClose={() => setSelectedQuote(null)}
+        >
+          {[
+            ['Order name', selectedQuote.order_name || '—'],
+            ['Dealer', selectedQuote.dealer],
+            ['Channel', selectedQuote.channel],
+            ['Date', fmtDate(selectedQuote.date)],
+            ['Status', selectedQuote.status],
+            ['Value', fmtCurrency(selectedQuote.value)],
+            ['Outcome', selectedQuote.isWon ? 'Won' : selectedQuote.isLost ? 'Lost' : selectedQuote.isOpen ? 'Open' : '—'],
+          ].map(([k, v]) => <DetailRow key={k} label={k} value={v} />)}
         </Modal>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Helpers and sub-components
+// ─────────────────────────────────────────────────────────────
+
+function whatChangedText(r) {
+  if (r.status === 'cold') {
+    if (r.lifetimeMonthly >= 3) {
+      return `Was sending ~${Math.round(r.lifetimeMonthly)}/mo · now silent`;
+    }
+    return 'No quote in 14+ days';
+  }
+  if (r.status === 'cooling') {
+    return `Avg ${Math.round(r.lifetimeMonthly)}/mo over ${r.tenureMonths}mo · last 30d: ${r.last30Count}`;
+  }
+  if (r.status === 'hot') {
+    return `Up from ~${Math.round(r.lifetimeMonthly)}/mo to ${r.last30Count} in last 30d`;
+  }
+  return '';
+}
+
+function ActionStatCard({ label, count, sub, color, active, onClick }) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        background: '#fff',
+        border: `${active ? '2px' : '0.5px'} solid ${active ? color : C.border}`,
+        borderRadius: 10,
+        padding: active ? '10px 13px' : '11px 14px',
+        cursor: 'pointer',
+        transition: 'border-color 0.1s',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        <div style={{ width: 8, height: 8, borderRadius: '50%', background: color }} />
+        <span style={{
+          fontSize: 11, fontWeight: 700, color,
+          textTransform: 'uppercase', letterSpacing: '.04em',
+        }}>{label}</span>
+      </div>
+      <div style={{ fontSize: 22, fontWeight: 700, color: C.text, lineHeight: 1.1 }}>{count}</div>
+      <div style={{ fontSize: 11, color: C.textSub, marginTop: 4 }}>{sub}</div>
+    </div>
+  );
+}
+
+function DetailMini({ label, value }) {
+  return (
+    <div style={{ background: '#f5f6f8', borderRadius: 6, padding: '8px 10px' }}>
+      <div style={{ fontSize: 10, color: C.textMuted, textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginTop: 2 }}>{value}</div>
+    </div>
+  );
+}
+
+function QuoteRow({ quote, onClick, showAge }) {
+  const dateText = fmtDate(quote.date);
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        padding: '6px 0', borderBottom: `0.5px solid ${C.border}`,
+        cursor: 'pointer', fontSize: 11,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8,
+      }}
+    >
+      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ color: C.textMuted }}>#{quote.orderNum}</span>{' '}
+        {quote.order_name || quote.dealer}
+      </span>
+      <span style={{ color: C.text, fontWeight: 600 }}>{fmtCurrency(quote.value)}</span>
+      <span style={{ color: C.textMuted, fontSize: 10, minWidth: 50, textAlign: 'right' }}>
+        {showAge && quote.date ? `${Math.floor((new Date() - quote.date) / 86400000)}d` : dateText}
+      </span>
     </div>
   );
 }

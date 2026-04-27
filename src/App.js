@@ -63,7 +63,7 @@ function Dashboard() {
     <div style={{minHeight:'100vh',background:'#f5f6f8'}}>
       <Nav activePage={activePage} setActivePage={setActivePage}
         lastRefresh={lastRefresh} onRefresh={loadData} loading={loading} />
-      <main>{pages[activePage] || pages['pipeline']}</main>
+      <main>{pages[activePage] || pages['overview']}</main>
     </div>
   );
 }

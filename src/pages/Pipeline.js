@@ -61,7 +61,7 @@ export default function Pipeline({ data }) {
       {d.winsThisWeekCount > 0 && (
         <div
           onClick={() => setDrill({
-            title: `Won this week (${d.winsThisWeekCount} · ${fmtCurrency(d.winsThisWeekValue)})`,
+            title: `Won last 7 days (${d.winsThisWeekCount} · ${fmtCurrency(d.winsThisWeekValue)})`,
             type: 'wins',
             items: d.winsThisWeek,
           })}
@@ -74,7 +74,7 @@ export default function Pipeline({ data }) {
           onMouseEnter={e => e.currentTarget.style.background = '#DFEFC8'}
           onMouseLeave={e => e.currentTarget.style.background = '#EAF3DE'}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#27500A', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>
-            Won this week
+            Won last 7 days
           </div>
           <div style={{ fontSize: 13, color: '#173404' }}>
             <span style={{ fontWeight: 600 }}>{d.winsThisWeekCount} {d.winsThisWeekCount === 1 ? 'job' : 'jobs'} · {fmtCurrency(d.winsThisWeekValue)}</span>

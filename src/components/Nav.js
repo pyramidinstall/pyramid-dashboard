@@ -7,7 +7,7 @@ const OWNER_PAGES = [
   { id:'pipeline', label:'Pipeline' },
   { id:'backlog', label:'Jobs in flight' },
   { id:'dealers', label:'Dealer relationships' },
-  { id:'installnet', label:'INSTALL Net' },
+  { id:'installnet', label:'INET (legacy)' },
   { id:'relationships', label:'Relationships' },
 ];
 const BILLY_PAGES = [
