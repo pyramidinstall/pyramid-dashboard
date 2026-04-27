@@ -16,10 +16,20 @@ const BILLY_PAGES = [
   { id:'dealers', label:'Dealer relationships' },
   { id:'relationships', label:'Relationships' },
 ];
+const LINDA_PAGES = [
+  { id:'backlog', label:'Jobs in flight' },
+];
+
+function pagesForUser(user) {
+  if (user?.isOwner) return OWNER_PAGES;
+  if (user?.isLinda) return LINDA_PAGES;
+  if (user?.isBilly) return BILLY_PAGES;
+  return BILLY_PAGES; // safe default for any future authorized user
+}
 
 export default function Nav({ activePage, setActivePage, lastRefresh, onRefresh, loading }) {
   const { user, logout } = useAuth();
-  const pages = user?.isOwner ? OWNER_PAGES : BILLY_PAGES;
+  const pages = pagesForUser(user);
   return (
     <nav style={{ background:C.navy, color:'#fff', padding:'0 20px', display:'flex', alignItems:'center', height:50, gap:0, boxShadow:'0 2px 8px rgba(0,0,0,0.2)', position:'sticky', top:0, zIndex:100 }}>
       <div style={{ display:'flex', alignItems:'center', gap:8, marginRight:24, flexShrink:0 }}>

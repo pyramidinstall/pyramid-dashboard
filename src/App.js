@@ -15,9 +15,37 @@ import Relationships from './pages/Relationships';
 
 const CLIENT_ID = '161922713447-e3lu6l1bbihuj0ru3b28bdothktvjplj.apps.googleusercontent.com';
 
+// Pages each role is allowed to see
+const ROLE_PAGES = {
+  owner: ['overview', 'pipeline', 'backlog', 'dealers', 'installnet', 'relationships'],
+  billy: ['pipeline', 'backlog', 'dealers', 'relationships'],
+  linda: ['backlog'],
+};
+
+// Default landing page per role
+const DEFAULT_PAGE = {
+  owner: 'overview',
+  billy: 'pipeline',
+  linda: 'backlog',
+};
+
+function defaultForUser(user) {
+  if (user?.isOwner) return DEFAULT_PAGE.owner;
+  if (user?.isBilly) return DEFAULT_PAGE.billy;
+  if (user?.isLinda) return DEFAULT_PAGE.linda;
+  return 'pipeline';
+}
+
+function allowedPagesForUser(user) {
+  if (user?.isOwner) return ROLE_PAGES.owner;
+  if (user?.isBilly) return ROLE_PAGES.billy;
+  if (user?.isLinda) return ROLE_PAGES.linda;
+  return ROLE_PAGES.billy;
+}
+
 function Dashboard() {
   const { user, accessToken } = useAuth();
-  const [activePage, setActivePage] = useState('overview');
+  const [activePage, setActivePage] = useState(defaultForUser(user));
   const [rawData, setRawData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -59,11 +87,17 @@ function Dashboard() {
     relationships: <Relationships data={data} isOwner={user?.isOwner} />,
   };
 
+  // Defense in depth: even if activePage is set to a page the user can't access
+  // (via state manipulation or stale state from a different role), force it back
+  // to the role's default landing page.
+  const allowedPages = allowedPagesForUser(user);
+  const safePage = allowedPages.includes(activePage) ? activePage : defaultForUser(user);
+
   return (
     <div style={{minHeight:'100vh',background:'#f5f6f8'}}>
-      <Nav activePage={activePage} setActivePage={setActivePage}
+      <Nav activePage={safePage} setActivePage={setActivePage}
         lastRefresh={lastRefresh} onRefresh={loadData} loading={loading} />
-      <main>{pages[activePage] || pages['overview']}</main>
+      <main>{pages[safePage] || pages[defaultForUser(user)]}</main>
     </div>
   );
 }

@@ -1,7 +1,13 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 
-const ALLOWED_EMAILS = ['jordan@pyramidinstall.com', 'billy@pyramidinstall.com'];
+const ALLOWED_EMAILS = [
+  'jordan@pyramidinstall.com',
+  'billy@pyramidinstall.com',
+  'linda@pyramidinstall.com',
+];
 const OWNER_EMAIL = 'jordan@pyramidinstall.com';
+const BILLY_EMAIL = 'billy@pyramidinstall.com';
+const LINDA_EMAIL = 'linda@pyramidinstall.com';
 
 const AuthContext = createContext(null);
 
@@ -23,11 +29,22 @@ export function AuthProvider({ children }) {
     if (!ALLOWED_EMAILS.includes(email)) {
       return { error: 'Access denied. Your account is not authorized.' };
     }
+    // Role determines what pages are accessible.
+    // Owner sees everything; Billy sees everything except Overview;
+    // Linda only sees Jobs in Flight.
+    let role = 'team';
+    if (email === OWNER_EMAIL) role = 'owner';
+    else if (email === BILLY_EMAIL) role = 'billy';
+    else if (email === LINDA_EMAIL) role = 'linda';
+
     const userData = {
       email,
       name: profile.name,
       picture: profile.picture,
-      isOwner: email === OWNER_EMAIL,
+      role,
+      isOwner: role === 'owner',
+      isBilly: role === 'billy',
+      isLinda: role === 'linda',
     };
     setUser(userData);
     setAccessToken(token);
