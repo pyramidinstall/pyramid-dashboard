@@ -796,7 +796,13 @@ export function useOverviewData(data) {
 
 // ── PIPELINE DATA HOOK ───────────────────────────────────────
 // Includes: INET wins, T&M-excluded win rate, XL toggle, PM review queue
-export function usePipelineData(data) {
+// `refMonth` is optional: { year, month0 } where month0 is 0-indexed.
+// When omitted, defaults to current month and behaves identically to before.
+// When set to a past month, calendar-month-based stats (this month at a glance,
+// quote pace, 3-mo avg baseline, all-time best comparison) retarget to that month.
+// Other sections (wins ticker, open quotes, PM review queue, moonshots, etc.)
+// always reflect actual current state regardless of refMonth.
+export function usePipelineData(data, refMonth) {
   return useMemo(() => {
     if (!data) return null;
     const { orders, installnet, pm_reviews } = data;
@@ -806,14 +812,41 @@ export function usePipelineData(data) {
     today.setHours(0, 0, 0, 0);
     const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
     const currentMonthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-    const daysInMonth = currentMonthEnd.getDate();
-    const dayOfMonth = today.getDate();
-    const monthProgress = dayOfMonth / daysInMonth;
 
-    const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    // ── REFERENCE MONTH CONTEXT ──────────────────────────────
+    // refMonth = { year, month0 } | null | undefined
+    // If null/undefined → default to current month (same behavior as before).
+    const refIsCurrent =
+      !refMonth ||
+      (refMonth.year === today.getFullYear() && refMonth.month0 === today.getMonth());
+    const refMonthStart = refIsCurrent
+      ? currentMonthStart
+      : new Date(refMonth.year, refMonth.month0, 1);
+    const refMonthEnd = refIsCurrent
+      ? currentMonthEnd
+      : new Date(refMonth.year, refMonth.month0 + 1, 0);
+    const refDaysInMonth = refMonthEnd.getDate();
+    const refDayOfMonth = refIsCurrent ? today.getDate() : refDaysInMonth;
+    const refMonthProgress = refDayOfMonth / refDaysInMonth;
+    // The "as-of date" for filtering: today for current month, end-of-month for past.
+    const refEffectiveDate = refIsCurrent
+      ? today
+      : (() => { const d = new Date(refMonthEnd); d.setHours(23, 59, 59, 999); return d; })();
+    // Month before the reference month
+    const refLastMonthStart = new Date(refMonthStart.getFullYear(), refMonthStart.getMonth() - 1, 1);
+    // Quarter containing the reference month
+    const refQuarterStart = new Date(
+      refMonthStart.getFullYear(),
+      Math.floor(refMonthStart.getMonth() / 3) * 3,
+      1
+    );
 
-    const currentQ = Math.floor(today.getMonth() / 3);
-    const currentQuarterStart = new Date(today.getFullYear(), currentQ * 3, 1);
+    // Legacy aliases — keep for backward compat with downstream readers
+    const daysInMonth = refDaysInMonth;
+    const dayOfMonth = refDayOfMonth;
+    const monthProgress = refMonthProgress;
+    const lastMonthStart = refLastMonthStart;
+    const currentQuarterStart = refQuarterStart;
 
     const year2Start = new Date(YEAR2_START);
 
@@ -846,9 +879,12 @@ export function usePipelineData(data) {
 
     const winsThisWeek = wonWithDates.filter(r => r.wonDate >= weekAgo)
                                       .sort((a, b) => b.gt - a.gt);
-    const winsThisMonth = wonWithDates.filter(r => r.wonDate >= currentMonthStart);
+    // "This month" wins retargets to the reference month
+    const winsThisMonth = wonWithDates.filter(r =>
+      r.wonDate >= refMonthStart && r.wonDate <= refEffectiveDate
+    );
     const winsLastMonth = wonWithDates.filter(r =>
-      r.wonDate >= lastMonthStart && r.wonDate < currentMonthStart
+      r.wonDate >= refLastMonthStart && r.wonDate < refMonthStart
     );
 
     const winsThisMonthValue = winsThisMonth.reduce((s, r) => s + r.gt, 0);
@@ -961,11 +997,11 @@ export function usePipelineData(data) {
     const formalThisMonth = orders.filter(r => {
       if (!isFormalNonInet(r)) return false;
       const d = parseDate(r.created_date);
-      return d && d >= currentMonthStart && d <= today;
+      return d && d >= refMonthStart && d <= refEffectiveDate;
     });
     const inetThisMonth = installnet.filter(r => {
       const d = parseDate(r.date_requested);
-      return d && d >= currentMonthStart && d <= today;
+      return d && d >= refMonthStart && d <= refEffectiveDate;
     });
 
     const paceMetrics = (formalArr, inetArr) => ({
@@ -980,16 +1016,17 @@ export function usePipelineData(data) {
       inetThisMonth.filter(r => !inetIsXL(r))
     );
 
-    const threeMoStart = new Date(today.getFullYear(), today.getMonth() - 3, 1);
+    // 3-mo avg: 3 months ending immediately before the reference month
+    const threeMoStart = new Date(refMonthStart.getFullYear(), refMonthStart.getMonth() - 3, 1);
 
     const formal3mo = orders.filter(r => {
       if (!isFormalNonInet(r)) return false;
       const d = parseDate(r.created_date);
-      return d && d >= threeMoStart && d < currentMonthStart;
+      return d && d >= threeMoStart && d < refMonthStart;
     });
     const inet3mo = installnet.filter(r => {
       const d = parseDate(r.date_requested);
-      return d && d >= threeMoStart && d < currentMonthStart;
+      return d && d >= threeMoStart && d < refMonthStart;
     });
 
     const m3WithXL = paceMetrics(formal3mo, inet3mo);
@@ -1029,10 +1066,11 @@ export function usePipelineData(data) {
     };
 
     const bucketKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    const currentKey = bucketKey(today);
+    const refMonthKey = bucketKey(refMonthStart);
 
     const bestFromBuckets = (b) => {
-      const complete = Object.entries(b).filter(([k]) => k !== currentKey);
+      // Exclude the reference month from "all-time best" so we don't compare against ourselves
+      const complete = Object.entries(b).filter(([k]) => k !== refMonthKey);
       return {
         count: complete.reduce((m, [, v]) => Math.max(m, v.count), 0),
         value: complete.reduce((m, [, v]) => Math.max(m, v.value), 0),
@@ -1042,7 +1080,9 @@ export function usePipelineData(data) {
     const bestWithXL = bestFromBuckets(buildBuckets(false));
     const bestNoXL   = bestFromBuckets(buildBuckets(true));
 
-    const project = (current) => monthProgress > 0 ? Math.round(current / monthProgress) : 0;
+    // Projection: only meaningful for current-month-in-progress.
+    // For past months refMonthProgress = 1.0, so projection equals actual final value.
+    const project = (current) => refMonthProgress > 0 ? Math.round(current / refMonthProgress) : 0;
     const projectedMonthEndCountWithXL = project(thisMonthWithXL.count);
     const projectedMonthEndValueWithXL = project(thisMonthWithXL.value);
     const projectedMonthEndCountNoXL   = project(thisMonthNoXL.count);
@@ -1057,7 +1097,7 @@ export function usePipelineData(data) {
       if (!pmFirstSeen[r.pm] || d < pmFirstSeen[r.pm]) pmFirstSeen[r.pm] = d;
     });
     const newPMsThisMonth = Object.entries(pmFirstSeen)
-      .filter(([, d]) => d >= currentMonthStart && d <= today)
+      .filter(([, d]) => d >= refMonthStart && d <= refEffectiveDate)
       .map(([pm, d]) => {
         const rows = orders.filter(r => r.pm === pm);
         return {
@@ -1079,7 +1119,7 @@ export function usePipelineData(data) {
       }
     });
     const newDealersThisQ = Object.entries(dealerFirstSeen)
-      .filter(([, d]) => d >= currentQuarterStart && d <= today)
+      .filter(([, d]) => d >= refQuarterStart && d <= refEffectiveDate)
       .map(([customer, d]) => {
         const rows = orders.filter(r => r.customer === customer);
         return {
@@ -1241,8 +1281,12 @@ export function usePipelineData(data) {
       today: today.toISOString().slice(0, 10),
       dayOfMonth,
       daysInMonth,
-      monthName: today.toLocaleString('default', { month: 'long' }),
-      year: today.getFullYear(),
+      monthName: refMonthStart.toLocaleString('default', { month: 'long' }),
+      year: refMonthStart.getFullYear(),
+      // Reference-month metadata for the page UI
+      refMonth: { year: refMonthStart.getFullYear(), month0: refMonthStart.getMonth() },
+      refMonthLabel: refMonthStart.toLocaleString('default', { month: 'short', year: '2-digit' }),
+      refIsCurrent,
 
       winsThisWeek,
       winsThisWeekCount: winsThisWeek.length,
@@ -1307,7 +1351,8 @@ export function usePipelineData(data) {
       overallMedian,
       reviewLog,
     };
-  }, [data]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, refMonth?.year, refMonth?.month0]);
 }
 
 // ── JOBS IN FLIGHT ───────────────────────────────────────────
@@ -1941,13 +1986,15 @@ export function useRelationshipData(data) {
         // - hot: established AND L30 above baseline+SD
         // - steady: everything else with established history
         let status = 'steady';
-        const hasMinHistory = totalQuotes >= 3;
+        const hasAnyHistory = totalQuotes >= 1;
         const isEstablished = totalQuotes >= 10 && tenureMonths >= 6;
         const isNew = tenureMonths < 6;
 
-        if (daysSinceLastQuote !== null && daysSinceLastQuote >= 180 && hasMinHistory) {
+        // Silent PMs go to reactivation/cold regardless of quote count —
+        // we'd rather see them in those sections than padding the active scorecard.
+        if (daysSinceLastQuote !== null && daysSinceLastQuote >= 180 && hasAnyHistory) {
           status = 'reactivation';
-        } else if (daysSinceLastQuote !== null && daysSinceLastQuote >= 14 && hasMinHistory) {
+        } else if (daysSinceLastQuote !== null && daysSinceLastQuote >= 14 && hasAnyHistory) {
           status = 'cold';
         } else if (isNew && totalQuotes >= 1) {
           status = 'new';

@@ -24,7 +24,9 @@ function pmReviewFormUrl(pmName) {
 }
 
 export default function Pipeline({ data }) {
-  const d = usePipelineData(data);
+  // Month selector — null = current month (default). Set to {year, month0} for past months.
+  const [refMonth, setRefMonth] = useState(null);
+  const d = usePipelineData(data, refMonth);
   const [reviewPM, setReviewPM] = useState(null); // PM object from reviewQueue
   const [winRateDrill, setWinRateDrill] = useState(null); // 'pm' | 'dealer' | 'cohort'
   const [orderDetail, setOrderDetail] = useState(null);
@@ -32,6 +34,32 @@ export default function Pipeline({ data }) {
   const [includeXL, setIncludeXL] = useState(false); // pace bars: exclude XL by default
 
   if (!d) return null;
+
+  // Build last 6 months for the dropdown (most recent first, current month included)
+  const monthOptions = (() => {
+    const opts = [];
+    const today = new Date();
+    for (let i = 0; i < 6; i++) {
+      const dt = new Date(today.getFullYear(), today.getMonth() - i, 1);
+      opts.push({
+        year: dt.getFullYear(),
+        month0: dt.getMonth(),
+        label: dt.toLocaleString('default', { month: 'short', year: '2-digit' }),
+        isCurrent: i === 0,
+      });
+    }
+    return opts;
+  })();
+
+  const handleMonthChange = (val) => {
+    if (val === 'current') return setRefMonth(null);
+    const [year, month0] = val.split('-').map(Number);
+    setRefMonth({ year, month0 });
+  };
+
+  const monthSelectValue = d.refIsCurrent
+    ? 'current'
+    : `${d.refMonth.year}-${d.refMonth.month0}`;
 
   // Clean PM display name helper ("LAST, First" → "First Last")
   const formatPM = (pm) => {
@@ -51,9 +79,31 @@ export default function Pipeline({ data }) {
           <h1 style={{ fontSize: 20, fontWeight: 700, color: C.text }}>Pipeline</h1>
           <p style={{ fontSize: 12, color: C.textSub, marginTop: 2 }}>Filling the funnel · closing the open book</p>
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 13, color: C.textSub }}>{d.monthName} {d.year}</div>
-          <div style={{ fontSize: 11, color: C.textMuted }}>day {d.dayOfMonth} of {d.daysInMonth}</div>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          <select
+            value={monthSelectValue}
+            onChange={e => handleMonthChange(e.target.value)}
+            style={{
+              fontSize: 12, padding: '5px 10px',
+              border: `0.5px solid ${C.border}`, borderRadius: 4,
+              background: '#fff', cursor: 'pointer',
+            }}
+          >
+            <option value="current">{monthOptions[0].label} (current)</option>
+            {monthOptions.slice(1).map(m => (
+              <option key={`${m.year}-${m.month0}`} value={`${m.year}-${m.month0}`}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 13, color: C.textSub }}>{d.monthName} {d.year}</div>
+            <div style={{ fontSize: 11, color: C.textMuted }}>
+              {d.refIsCurrent
+                ? `day ${d.dayOfMonth} of ${d.daysInMonth}`
+                : `full month (${d.daysInMonth} days)`}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -93,21 +143,37 @@ export default function Pipeline({ data }) {
         </div>
       )}
 
+      {/* PAST-MONTH BANNER — context for users so they know what's time-shifted */}
+      {!d.refIsCurrent && (
+        <div style={{
+          background: '#FEF6E5', border: `0.5px solid ${C.amber}`, borderRadius: 8,
+          padding: '8px 12px', marginBottom: 14, fontSize: 12, color: C.amberTxt,
+          display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.amber, flexShrink: 0 }} />
+          <div>
+            Viewing <strong>{d.monthName} {d.year}</strong> · &ldquo;At a glance&rdquo; cards and Quote Pace bars reflect this past month. Wins ticker, open quotes, expired list, and PM review queue still show current state.
+          </div>
+        </div>
+      )}
+
       {/* BLOCK 1: AT A GLANCE (4 cards) */}
       <div style={{ background: '#fff', border: `0.5px solid ${C.border}`, borderRadius: 12, padding: '14px 18px', marginBottom: 14 }}>
         <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 12 }}>
-          This month at a glance
+          {d.refIsCurrent ? 'This month at a glance' : `${d.monthName} ${d.year} at a glance`}
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12 }}>
           <StatCard
-            label="Wins this month"
+            label={d.refIsCurrent ? 'Wins this month' : `Wins · ${d.refMonthLabel}`}
             value={`${d.winsThisMonthCount}`}
             valueSub={`· ${fmtCurrency(d.winsThisMonthValue)}`}
             valueColor={C.green}
-            footer={`vs ${d.winsLastMonthCount} · ${fmtCurrency(d.winsLastMonthValue)} last month`}
+            footer={`vs ${d.winsLastMonthCount} · ${fmtCurrency(d.winsLastMonthValue)} prior month`}
             onClick={d.winsThisMonthCount > 0 ? () => setDrill({
-              title: `Wins this month (${d.winsThisMonthCount})`,
+              title: d.refIsCurrent
+                ? `Wins this month (${d.winsThisMonthCount})`
+                : `Wins ${d.refMonthLabel} (${d.winsThisMonthCount})`,
               type: 'wins',
               items: d.winsThisMonth,
             }) : null}
@@ -122,19 +188,21 @@ export default function Pipeline({ data }) {
           />
 
           <ProgressCard
-            label="New PMs this month"
+            label={d.refIsCurrent ? 'New PMs this month' : `New PMs · ${d.refMonthLabel}`}
             current={d.newPMsThisMonthCount}
             target={2}
             footer={`${d.newPMsY2YTD} added Year 2 YTD`}
             onClick={d.newPMsThisMonthCount > 0 ? () => setDrill({
-              title: `New PMs this month (${d.newPMsThisMonthCount})`,
+              title: d.refIsCurrent
+                ? `New PMs this month (${d.newPMsThisMonthCount})`
+                : `New PMs ${d.refMonthLabel} (${d.newPMsThisMonthCount})`,
               type: 'newPMs',
               items: d.newPMsThisMonth,
             }) : null}
           />
 
           <ProgressCard
-            label={`New dealers · Q${Math.floor(new Date().getMonth() / 3) + 1} ${d.year}`}
+            label={`New dealers · Q${Math.floor((d.refMonth?.month0 ?? new Date().getMonth()) / 3) + 1} ${d.year}`}
             current={d.newDealersThisQCount}
             target={2}
             footer={`${d.newDealersY2YTD} added Year 2 YTD`}
@@ -152,7 +220,9 @@ export default function Pipeline({ data }) {
       <div style={{ background: '#fff', border: `0.5px solid ${C.border}`, borderRadius: 12, padding: '14px 18px 18px', marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 14 }}>
           <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '.05em' }}>
-            Quote pace · through day {d.dayOfMonth} of {d.daysInMonth}
+            {d.refIsCurrent
+              ? `Quote pace · through day ${d.dayOfMonth} of ${d.daysInMonth}`
+              : `Quote pace · ${d.refMonthLabel} (full month)`}
           </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: C.textSub, cursor: 'pointer', userSelect: 'none' }}>
             <input
@@ -172,6 +242,7 @@ export default function Pipeline({ data }) {
           target={includeXL ? d.trailingMo3CountWithXL : d.trailingMo3Count}
           best={includeXL ? d.allTimeBestCountWithXL : d.allTimeBestCount}
           monthProgress={d.monthProgress}
+          isPast={!d.refIsCurrent}
           isValue={false}
         />
 
@@ -184,6 +255,7 @@ export default function Pipeline({ data }) {
           target={includeXL ? d.trailingMo3ValueWithXL : d.trailingMo3Value}
           best={includeXL ? d.allTimeBestValueWithXL : d.allTimeBestValue}
           monthProgress={d.monthProgress}
+          isPast={!d.refIsCurrent}
           isValue={true}
         />
 
@@ -483,7 +555,8 @@ function ProgressCard({ label, current, target, footer, color, onClick }) {
 // Pace bar — matches v5 mockup
 // Filled bar = current through today. Tick marks = 3-mo avg and all-time best
 // (positioned at their share of all-time-best, clamped to bar width).
-function PaceBar({ label, current, projection, target, best, monthProgress, isValue }) {
+// `isPast` = true when viewing a completed prior month (changes labels, status logic).
+function PaceBar({ label, current, projection, target, best, monthProgress, isValue, isPast }) {
   const fmt = isValue ? fmtCurrency : (v) => String(v);
 
   // Bar scale: max of (projection, target, best) padded by 8% so best tick
@@ -497,8 +570,13 @@ function PaceBar({ label, current, projection, target, best, monthProgress, isVa
   // "On pace" judgement based on projection vs target
   // On day 1 we haven't had time, so be gentle
   let status, statusColor;
-  if (monthProgress < 0.15) {
-    // Too early in month to make strong statements
+  if (isPast) {
+    // Past months: compare actual final vs target
+    if (current >= target * 1.05) { status = 'Above 3-mo avg'; statusColor = C.green; }
+    else if (current >= target * 0.95) { status = 'On par with 3-mo avg'; statusColor = C.green; }
+    else if (current >= target * 0.85) { status = 'Slightly below 3-mo avg'; statusColor = C.amber; }
+    else { status = 'Below 3-mo avg'; statusColor = C.red; }
+  } else if (monthProgress < 0.15) {
     status = 'Early month';
     statusColor = C.textMuted;
   } else if (projection >= target * 1.05) {
@@ -517,6 +595,18 @@ function PaceBar({ label, current, projection, target, best, monthProgress, isVa
 
   // Smart action text
   const actionText = (() => {
+    if (isPast) {
+      if (current >= best) return `Beat the prior all-time best.`;
+      if (current >= target * 0.95) {
+        const gap = Math.round(best - current);
+        if (gap > 0 && isValue) return `Final: ${fmt(current)} — matches 3-mo average. ${fmt(Math.abs(gap))} short of the prior all-time best.`;
+        if (gap > 0) return `Final: ${current} — matches 3-mo average. ${Math.abs(gap)} short of the prior all-time best.`;
+        return `Final: ${fmt(current)} — matched 3-mo average.`;
+      }
+      const gap = target - current;
+      if (gap > 0 && isValue) return `Final: ${fmt(current)} · ${fmt(Math.abs(gap))} below 3-mo average.`;
+      return `Final: ${fmt(current)} · ${Math.abs(gap)} below 3-mo average.`;
+    }
     if (monthProgress < 0.15) {
       return `Early in the month — projection will stabilize over the next week.`;
     }
@@ -549,7 +639,12 @@ function PaceBar({ label, current, projection, target, best, monthProgress, isVa
           <div style={{ fontSize: 12, color: C.textSub, fontWeight: 500 }}>{label}</div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 2 }}>
             <span style={{ fontSize: 22, fontWeight: 600, color: C.text }}>{fmt(current)}</span>
-            <span style={{ fontSize: 12, color: C.textSub }}>on pace for {fmt(projection)} by month-end</span>
+            {!isPast && (
+              <span style={{ fontSize: 12, color: C.textSub }}>on pace for {fmt(projection)} by month-end</span>
+            )}
+            {isPast && (
+              <span style={{ fontSize: 12, color: C.textSub }}>final</span>
+            )}
           </div>
         </div>
       </div>
