@@ -1351,7 +1351,6 @@ export function usePipelineData(data, refMonth) {
       overallMedian,
       reviewLog,
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, refMonth?.year, refMonth?.month0]);
 }
 
